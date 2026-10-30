@@ -44,6 +44,12 @@ public static class VddControl
 
     public static string SettingsPath => Path.Combine(ConfigDirectory, "vdd_settings.xml");
 
+    [System.Runtime.InteropServices.DllImport("cfgmgr32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    private static extern int CM_Locate_DevNodeW(out uint devInst, string deviceId, uint flags);
+
+    /// <summary>Gerät ist tatsächlich vorhanden (nicht nur als "getrennt" in der Registry eingetragen).</summary>
+    private static bool IsPresent(string instanceId) => CM_Locate_DevNodeW(out _, instanceId, 0) == 0; // CM_LOCATE_DEVNODE_NORMAL
+
     /// <summary>Geräteinstanzen des VDD (von MONIVOX oder bereits vorher installiert).</summary>
     public static IReadOnlyList<string> FindDeviceInstances()
     {
@@ -64,7 +70,8 @@ public static class VddControl
                     if (instKey?.GetValue("HardwareID") is string[] ids &&
                         ids.Any(id => id.Equals(HardwareId, StringComparison.OrdinalIgnoreCase)))
                     {
-                        result.Add($@"{bus}\{deviceName}\{instance}");
+                        string full = $@"{bus}\{deviceName}\{instance}";
+                        if (IsPresent(full)) result.Add(full);
                     }
                 }
             }
@@ -188,6 +195,7 @@ public static class VddControl
             {
                 Run("pnputil.exe", $"/remove-device \"{instance}\"", log, allowed: [0, 3010]);
                 log($"Gesperrtes Gerät {instance} entfernt.");
+                blocked.Add(DeviceNumber(instance)); // Nummer erst nach einem Neustart wieder verwenden
             }
             catch (InvalidOperationException)
             {
@@ -283,9 +291,14 @@ public static class VddControl
     public static void RestartDevice(Action<string> log)
     {
         foreach (var instance in FindDeviceInstances())
-            if (!IsDisabled(instance))
-                Run("pnputil.exe", $"/restart-device \"{instance}\"", log, allowed: [0, 3010]);
+        {
+            if (IsDisabled(instance)) continue;
+            try { Run("pnputil.exe", $"/restart-device \"{instance}\"", log, allowed: [0, 3010]); }
+            catch (InvalidOperationException e) { log($"Neustart von {instance} nicht möglich: {FirstLine(e.Message)}"); }
+        }
     }
+
+    private static string FirstLine(string text) => text.Split('\n')[0].Trim();
 
     public static bool TrySendPipeCommand(string command)
     {
