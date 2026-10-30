@@ -26,24 +26,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: microsoft/setup-msbuild@v2
+        with:
+          msbuild-architecture: x64
       - name: Treiber bauen (unsigniert)
         shell: pwsh
         run: |
-          # Die WDK-INF-Prüfung lädt 'x86\InfVerif.dll' relativ zum Arbeitsverzeichnis. Auf den
-          # GitHub-Runnern liegt die DLL im Tools-Ordner des WDK – msbuild daher von dort starten.
-          $all = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10" -Recurse -Include InfVerif.dll,InfVerif.exe -ErrorAction SilentlyContinue
-          $all | ForEach-Object { Write-Output "::warning::Gefunden: $($_.FullName)" }
-          $dll = $all | Where-Object { $_.Name -eq 'InfVerif.dll' -and $_.Directory.Name -eq 'x86' } | Sort-Object FullName -Descending | Select-Object -First 1
-          if (-not $dll) { Write-Output "::error::x86\InfVerif.dll nicht gefunden"; exit 1 }
-          Write-Output "InfVerif: $($dll.FullName)"
-          $sln = Join-Path $PWD 'driver\MonivoxDriver.sln'
-          $log = Join-Path $PWD 'msbuild.log'
-          Push-Location $dll.Directory.Parent.FullName
-          msbuild $sln /m /p:Configuration=Release /p:Platform=x64 /p:SignMode=Off /nologo /v:minimal | Tee-Object -FilePath $log
-          $code = $LASTEXITCODE
-          Pop-Location
-          if ($code -ne 0) {
-            Select-String -Path $log -Pattern ": (fatal )?error |error MSB|error [A-Z]+\d+" | Select-Object -First 8 | ForEach-Object { Write-Output "::error::$($_.Line.Trim())" }
+          # 64-Bit-MSBuild nötig: der WDK liefert InfVerif nur als x64-DLL.
+          msbuild driver\MonivoxDriver.sln /m /p:Configuration=Release /p:Platform=x64 /p:SignMode=Off /nologo /v:minimal | Tee-Object -FilePath msbuild.log
+          if ($LASTEXITCODE -ne 0) {
+            Select-String -Path msbuild.log -Pattern ": (fatal )?error |error MSB|error [A-Z]+\d+" | Select-Object -First 8 | ForEach-Object { Write-Output "::error::$($_.Line.Trim())" }
             exit 1
           }
       - name: Treiber signieren (Einweg-Zertifikat, keine Testsignatur nötig)
