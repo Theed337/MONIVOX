@@ -13,9 +13,9 @@ CatalogFile=MonivoxIdd.cat
 DriverVer=
 
 [Manufacturer]
-%ManufacturerName%=Standard,NT$ARCH$
+%ManufacturerName%=Standard,NT$ARCH$.10.0...18362
 
-[Standard.NT$ARCH$]
+[Standard.NT$ARCH$.10.0...18362]
 ; Software-Gerät, angelegt vom MonivoxDevice-Tool (SwDeviceCreate)
 %DeviceName%=Monivox_Install, MonivoxIdd
 ; Alternativ root-enumeriert (z. B. mit devcon install)
