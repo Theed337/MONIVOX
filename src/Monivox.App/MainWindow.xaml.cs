@@ -62,7 +62,21 @@ public partial class MainWindow : Window
         RefreshDriver();
         RefreshAntiCheat();
         RefreshState();
+        controller.UpdateChanged += () => Dispatcher.BeginInvoke(RefreshUpdate);
+        RefreshUpdate();
     }
+
+    private void RefreshUpdate()
+    {
+        var upd = _controller.AvailableUpdate;
+        UpdateCard.Visibility = upd is null ? Visibility.Collapsed : Visibility.Visible;
+        if (upd is null) return;
+        UpdateText.Text = _controller.UpdateBusy ? $"Update {upd.Tag} wird installiert …" : $"Update {upd.Tag} verfügbar";
+        UpdateButton.IsEnabled = !_controller.UpdateBusy;
+        UpdateButton.Content = _controller.State == SplitState.Running ? "Teilen beenden & aktualisieren" : "Update installieren";
+    }
+
+    private async void InstallUpdate_Click(object sender, RoutedEventArgs e) => await _controller.InstallUpdateAsync();
 
     // Schließen = in den Infobereich minimieren
     protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
@@ -98,6 +112,7 @@ public partial class MainWindow : Window
         StatusDot.Fill = (Brush)FindResource(s == SplitState.Running ? "Ok" : "TextDim");
         ToggleButton.Content = s == SplitState.Running ? "Teilen beenden" : "Teilen starten";
         ToggleButton.IsEnabled = s is SplitState.Running or SplitState.Stopped;
+        RefreshUpdate();
     }
 
     private async void Toggle_Click(object sender, RoutedEventArgs e)

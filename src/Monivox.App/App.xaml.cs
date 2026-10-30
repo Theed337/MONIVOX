@@ -73,16 +73,26 @@ public partial class App : Application
         if (!startHidden || !VddControl.IsInstalled) ShowMainWindow();
 
         // "Die Bildschirme entstehen, sobald MONIVOX startet"
-        if (Controller.Settings.SplitOnStartup && VddControl.IsInstalled &&
+        if ((Controller.Settings.SplitOnStartup || e.Args.Contains("--resume")) && VddControl.IsInstalled &&
             Controller.FindProfile(Controller.Settings.LastProfile) is { } last)
         {
             await Controller.StartAsync(last);
         }
 
-        _updateTimer = new DispatcherTimer { Interval = TimeSpan.FromHours(6) };
+        int updatedIdx = Array.IndexOf(e.Args, "--updated");
+        if (updatedIdx >= 0 && updatedIdx + 1 < e.Args.Length)
+        {
+            Controller.AddLog($"MONIVOX wurde auf {e.Args[updatedIdx + 1]} aktualisiert.");
+            _tray?.ShowBalloonTip(4000, "MONIVOX", $"Aktualisiert auf {e.Args[updatedIdx + 1]}", Forms.ToolTipIcon.Info);
+        }
+
+        Controller.UpdateChanged += () => Dispatcher.BeginInvoke(RefreshTray);
+        _updateTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(30) };
         _updateTimer.Tick += async (_, _) => await Controller.CheckForUpdatesAsync(interactive: false);
         _updateTimer.Start();
-        _ = Task.Delay(TimeSpan.FromSeconds(30)).ContinueWith(_ => Dispatcher.BeginInvoke(async () => await Controller.CheckForUpdatesAsync(interactive: false)));
+        var firstCheck = new DispatcherTimer { Interval = TimeSpan.FromSeconds(10) };
+        firstCheck.Tick += async (_, _) => { firstCheck.Stop(); await Controller.CheckForUpdatesAsync(interactive: false); };
+        firstCheck.Start();
     }
 
     public void ShowMainWindow()
@@ -153,7 +163,11 @@ public partial class App : Application
 
         menu.Items.Add(new Forms.ToolStripSeparator());
         menu.Items.Add("Einstellungen öffnen", null, (_, _) => ShowMainWindow());
-        menu.Items.Add("Nach Updates suchen", null, async (_, _) => await Controller.CheckForUpdatesAsync(interactive: true));
+        if (Controller.AvailableUpdate is { } upd)
+            menu.Items.Add(new Forms.ToolStripMenuItem($"⬆ Update auf {upd.Tag} installieren", null, async (_, _) => await Controller.InstallUpdateAsync())
+            { Font = new Font(menu.Font, System.Drawing.FontStyle.Bold) });
+        else
+            menu.Items.Add("Nach Updates suchen", null, async (_, _) => await Controller.CheckForUpdatesAsync(interactive: true));
         menu.Items.Add(new Forms.ToolStripSeparator());
         menu.Items.Add("MONIVOX beenden", null, async (_, _) => await ExitAsync());
 

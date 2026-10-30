@@ -21,7 +21,6 @@ public sealed class SplitController : IDisposable
     private readonly WindowRules _rules;
     private CancellationTokenSource? _cts;
     private Task? _runTask;
-    private bool _updatePending;
 
     public ProfileStore Store { get; } = new(ProfileStore.DefaultPath);
     public SettingsDocument Settings { get; private set; }
@@ -165,7 +164,7 @@ public sealed class SplitController : IDisposable
                     _rules.Clear();
                     _lastRegions = [];
                     SetState(SplitState.Stopped);
-                    if (_updatePending) _ = CheckForUpdatesAsync(interactive: false);
+                    if (AvailableUpdate is not null && Settings.AutoUpdate) _ = InstallUpdateAsync();
                 });
             }
         });
@@ -192,46 +191,83 @@ public sealed class SplitController : IDisposable
         StateChanged?.Invoke();
     }
 
+    /// <summary>Gefundenes, noch nicht installiertes Update (oder null).</summary>
+    public Updater.ReleaseInfo? AvailableUpdate { get; private set; }
+    public bool UpdateBusy { get; private set; }
+    public event Action? UpdateChanged;
+
     /// <summary>
-    /// Sucht nach Updates. Während einer laufenden Aufteilung wird nicht neu gestartet (würde mitten im Spiel
-    /// die Bildschirme umbauen) – das Update wird dann nach dem Beenden der Aufteilung installiert.
+    /// Sucht nach Updates. Automatisch installiert wird nur, wenn keine Aufteilung läuft (sonst würden mitten im
+    /// Spiel die Bildschirme umgebaut). In jedem Fall erscheint in der App ein „Update installieren“-Knopf.
     /// </summary>
     public async Task CheckForUpdatesAsync(bool interactive)
     {
-        if (!interactive && !Settings.AutoUpdate) return;
+        if (UpdateBusy) return;
         var updater = new Updater(AddLog);
         try
         {
             var release = await updater.CheckAsync();
+            AvailableUpdate = release;
+            UpdateChanged?.Invoke();
             if (release is null)
             {
+                AddLog($"Update-Prüfung: MONIVOX {Updater.CurrentVersion} ist aktuell.");
                 if (interactive) Notify?.Invoke($"MONIVOX {Updater.CurrentVersion} ist aktuell.", false);
                 return;
             }
-            if (State != SplitState.Stopped)
+            AddLog($"Update {release.Tag} verfügbar (installiert: {Updater.CurrentVersion}).");
+            if (!interactive && Settings.AutoUpdate && State == SplitState.Stopped)
             {
-                _updatePending = true;
-                AddLog($"Update {release.Tag} verfügbar – wird nach dem Beenden der Aufteilung installiert.");
-                if (interactive) Notify?.Invoke($"Update {release.Tag} wird nach dem Beenden der Aufteilung installiert.", false);
+                await InstallUpdateAsync();
                 return;
             }
-            _updatePending = false;
+            Notify?.Invoke($"Update {release.Tag} verfügbar – in MONIVOX auf „Update installieren“ klicken.", false);
+        }
+        catch (Exception e) when (e is System.Net.Http.HttpRequestException or TaskCanceledException or IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            AddLog($"Update-Prüfung fehlgeschlagen: {e.Message}");
+            if (interactive) Notify?.Invoke($"Update-Prüfung fehlgeschlagen: {e.Message}", true);
+        }
+    }
+
+    /// <summary>Installiert das gefundene Update sofort (beendet dafür eine laufende Aufteilung) und startet neu.</summary>
+    public async Task InstallUpdateAsync()
+    {
+        if (UpdateBusy) return;
+        if (AvailableUpdate is null)
+        {
+            await CheckForUpdatesAsync(interactive: true);
+            if (AvailableUpdate is null) return;
+        }
+        UpdateBusy = true;
+        UpdateChanged?.Invoke();
+        bool wasRunning = State != SplitState.Stopped;
+        try
+        {
+            if (wasRunning) await StopAsync();
+            var updater = new Updater(AddLog);
+            var release = AvailableUpdate!;
+            AddLog($"Installiere Update {release.Tag} …");
             bool driverChanged = await updater.InstallAsync(release);
             if (driverChanged) await Task.Run(() => VddControl.Install(AddLog));
-            AddLog("Starte MONIVOX neu, um das Update zu aktivieren …");
-            Restart();
+            AddLog("Update installiert – MONIVOX startet neu.");
+            Restart(release.Tag, resume: wasRunning);
         }
         catch (Exception e) when (e is System.Net.Http.HttpRequestException or TaskCanceledException or IOException or UnauthorizedAccessException or InvalidOperationException)
         {
             AddLog($"Update fehlgeschlagen: {e.Message}");
-            if (interactive) Notify?.Invoke($"Update fehlgeschlagen: {e.Message}", true);
+            Notify?.Invoke($"Update fehlgeschlagen: {e.Message}", true);
+            UpdateBusy = false;
+            UpdateChanged?.Invoke();
         }
     }
 
-    public static void Restart()
+    public static void Restart(string? updatedTo = null, bool resume = false)
     {
         var exe = Environment.ProcessPath!;
-        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(exe, "--tray --restarted") { UseShellExecute = true });
+        var visible = Application.Current.Windows.OfType<Window>().Any(w => w.IsVisible);
+        string args = "--restarted" + (visible ? "" : " --tray") + (updatedTo is null ? "" : $" --updated {updatedTo}") + (resume ? " --resume" : "");
+        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(exe, args) { UseShellExecute = true });
         Application.Current.Shutdown();
     }
 
