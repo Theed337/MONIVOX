@@ -155,6 +155,40 @@ public class DesktopArrangementTests
     }
 }
 
+public class DirectArrangementTests
+{
+    [Fact]
+    public void DirectMode_PhysicalStays_VirtualBlockRightOfEverything()
+    {
+        // 4K-Monitor rechts neben einem 1080p-Hauptmonitor; Mitte = Direktbereich, links/rechts virtuell
+        var layout = new Layout("x", [new(0, 0, 0.25, 1), new(0.25, 0, 0.5, 1), new(0.75, 0, 0.25, 1)]) { DirectIndex = 1 };
+        var specs = LayoutResolver.Resolve(layout, new DisplayMode(3840, 2160, 60));
+        var virtualSpecs = specs.Where(s => s.Index != layout.DirectIndex).ToList();
+        var others = new[] { new DesktopArrangement.OtherDisplay("A", new PixelRect(0, 0, 1920, 1080), true) };
+        var plan = DirectArrangement.Create(virtualSpecs, specs[1].Dest, new PixelRect(1920, 0, 3840, 2160), false, others);
+
+        Assert.Equal(new PixelRect(1920, 0, 3840, 2160), plan.Physical);
+        Assert.Equal(new PixelRect(1920 + 960, 0, 1920, 2160), plan.WorkArea);
+        Assert.Equal(2, plan.Virtuals.Count);
+        Assert.All(plan.Virtuals, v => Assert.True(v.X >= 5760));
+        // gespiegelt: Bereich 2 liegt 2880 px rechts von Bereich 0
+        Assert.Equal(2880, plan.Virtuals[1].X - plan.Virtuals[0].X);
+    }
+
+    [Fact]
+    public void SmallRegions_AreLaidOutInARow_WithoutOverlap()
+    {
+        var layout = new Layout("x", [new(0, 0, 1, 0.9), new(0, 0.9, 0.5, 0.1), new(0.5, 0.9, 0.5, 0.1)]) { DirectIndex = 0 };
+        var specs = LayoutResolver.Resolve(layout, new DisplayMode(1920, 1080, 60));
+        var virtualSpecs = specs.Where(s => s.Index != 0).ToList();
+        Assert.False(VirtualBlock.CanMirror(virtualSpecs));
+        var plan = DirectArrangement.Create(virtualSpecs, specs[0].Dest, new PixelRect(0, 0, 1920, 1080), true, []);
+        var a = plan.Virtuals[0];
+        var b = plan.Virtuals[1];
+        Assert.Equal(a.X + a.Mode.Width, b.X);
+    }
+}
+
 public class ConfigFormatTests
 {
     [Fact]
@@ -201,17 +235,18 @@ public class ConfigFormatTests
     }
 
     [Fact]
-    public void CompositorConfig_ContainsAllViews()
+    public void CompositorConfig_ContainsViewsDirectAndFrames()
     {
         var cfg = CompositorConfig.Build(@"\\.\DISPLAY1",
         [
-            (@"\\.\DISPLAY3", new PixelRect(0, 0, 1920, 2160)),
-            (@"\\.\DISPLAY4", new PixelRect(1920, 0, 1920, 2160)),
-        ]);
+            new(@"\\.\DISPLAY3", new PixelRect(0, 0, 1920, 2160), "Discord"),
+            new(@"\\.\DISPLAY4", new PixelRect(1920, 0, 960, 2160), "Teams"),
+        ], (new PixelRect(2880, 0, 960, 2160), "Film"), frames: true);
         Assert.Contains(@"physical=\\.\DISPLAY1", cfg);
-        Assert.Contains(@"view=\\.\DISPLAY3,0,0,1920,2160", cfg);
-        Assert.Contains(@"view=\\.\DISPLAY4,1920,0,1920,2160", cfg);
-        Assert.Contains("clipcursor=1", cfg);
+        Assert.Contains(@"view=\\.\DISPLAY3,0,0,1920,2160,Discord", cfg);
+        Assert.Contains(@"view=\\.\DISPLAY4,1920,0,960,2160,Teams", cfg);
+        Assert.Contains("direct=2880,0,960,2160,Film", cfg);
+        Assert.Contains("frames=1", cfg);
     }
 }
 

@@ -52,7 +52,7 @@ public sealed class SplitController : IDisposable
         new Profile
         {
             Name = "Gaming",
-            Layout = LayoutPresets.MainAndTwoStacked with { Names = ["Spiel", "Discord", "Film"] },
+            Layout = LayoutPresets.MainAndTwoStacked with { Names = ["Spiel", "Discord", "Browser"], DirectIndex = 0 },
             Apps = [new AppAssignment { Executable = "Discord.exe", RegionIndex = 1, State = Core.WindowState.Maximized }],
         },
         new Profile { Name = "Arbeit", Layout = LayoutPresets.Grid2x2 },
@@ -99,6 +99,23 @@ public sealed class SplitController : IDisposable
 
     private IReadOnlyList<PixelRect> _lastRegions = [];
 
+    /// <summary>Rahmen ein-/ausblenden – sofort im laufenden Compositor und für den nächsten Start gemerkt.</summary>
+    public void ToggleFrames()
+    {
+        Settings = Settings with { ShowFrames = !Settings.ShowFrames };
+        Store.Save(Settings);
+        if (State == SplitState.Running)
+        {
+            try
+            {
+                using var evt = EventWaitHandle.OpenExisting(@"Global\MONIVOX-ToggleFrames");
+                evt.Set();
+            }
+            catch (WaitHandleCannotBeOpenedException) { }
+        }
+        StateChanged?.Invoke();
+    }
+
     public Profile? FindProfile(string? name) => Settings.Profiles.FirstOrDefault(p => p.Name == name);
 
     /// <summary>Startet die Aufteilung mit dem angegebenen Profil (stoppt vorher eine laufende).</summary>
@@ -121,7 +138,8 @@ public sealed class SplitController : IDisposable
         var options = new SplitOptions(profile.Layout,
             PhysicalDevice: string.IsNullOrWhiteSpace(profile.PhysicalMonitorId) ? null : NormalizeDevice(profile.PhysicalMonitorId),
             RefreshHz: profile.RefreshHz,
-            CompositorPath: Path.Combine(AppContext.BaseDirectory, "MonivoxCompositor.exe"));
+            CompositorPath: Path.Combine(AppContext.BaseDirectory, "MonivoxCompositor.exe"),
+            ShowFrames: Settings.ShowFrames);
 
         var session = new SplitSession(options, AddLog);
         session.Ready += regions => _ui.BeginInvoke(() =>

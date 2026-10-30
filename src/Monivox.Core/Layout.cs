@@ -23,6 +23,14 @@ public sealed record Layout
     /// <summary>Optionale Namen der Bereiche (z. B. "Spiel", "Discord", "Telemetrie").</summary>
     public IReadOnlyList<string> Names { get; init; } = [];
 
+    /// <summary>
+    /// Index des Direktbereichs oder -1. Der Direktbereich wird NICHT virtualisiert: dort zeigt der echte Monitor
+    /// sein Bild direkt an – keine Zusatzlatenz, G-Sync/FreeSync und kopiergeschützte Videos (DRM) funktionieren.
+    /// </summary>
+    public int DirectIndex { get; init; } = -1;
+
+    public bool HasDirect => DirectIndex >= 0 && DirectIndex < Regions.Count;
+
     public string RegionName(int index) =>
         index < Names.Count && !string.IsNullOrWhiteSpace(Names[index]) ? Names[index] : $"Bereich {index + 1}";
 
@@ -43,6 +51,7 @@ public sealed record Layout
 
         if (Regions.Count == 0) errors.Add("Das Layout enthält keinen Bereich.");
         if (Regions.Count > MaxRegions) errors.Add($"Maximal {MaxRegions} Bereiche erlaubt.");
+        if (DirectIndex >= Regions.Count) errors.Add("Der Direktbereich existiert nicht.");
 
         for (int i = 0; i < Regions.Count; i++)
         {

@@ -16,6 +16,8 @@ Nur der gewählte Monitor wird aufgeteilt – alle anderen bleiben völlig unver
 - **Infobereich**: läuft unten rechts in der Taskleiste, startet mit Windows (ohne UAC-Abfrage), Bildschirme entstehen beim Start automatisch.
   Doppelklick öffnet die Einstellungen, Rechtsklick zeigt Schnellbefehle.
 - **Automatische Updates** aus den GitHub-Releases – nie mitten in einer laufenden Aufteilung.
+- **Farbige Rahmen** mit Name, Größe und Art jedes Bereichs – ein-/ausblendbar (Tray, Einstellungen, Strg+Alt+Shift+F),
+  nie in Aufnahmen/Streams sichtbar und ausgeblendet ohne jeden Einfluss auf Spiele.
 - **Anti-Cheat-Check**: zeigt laufende Anti-Cheat-Systeme und warnt, falls Windows im Testmodus läuft.
 
 ## Ehrliche Einschränkungen
@@ -25,8 +27,10 @@ Nur der gewählte Monitor wird aufgeteilt – alle anderen bleiben völlig unver
 | ✅ Andere Monitore | unverändert: keine zusätzliche Latenz, G-Sync/FreeSync wie gewohnt |
 | ✅ Kein Testmodus | mitgelieferter, offiziell signierter Anzeigetreiber; Secure Boot bleibt an |
 | ✅ Anti-Cheat | MONIVOX greift nicht in Spiele ein. Probleme sind nicht bekannt, aber nicht ausgeschlossen |
-| ⚠️ Spiele auf aufgeteilten Bereichen | +~1 Bild Latenz, kein G-Sync/FreeSync; **randloses Vollbild** empfohlen |
-| ❌ Kopiergeschützte Videos (DRM) | werden auf aufgeteilten Bereichen schwarz. Lösung in Arbeit: „Direktbereich“ (siehe ROADMAP) |
+| ✅ **Direktbereich** (grün ★) | ein Bereich pro Monitor zeigt den echten Monitor: keine Zusatzlatenz, G-Sync/FreeSync, **DRM-Videos funktionieren** |
+| ⚠️ Spiele im Direktbereich | im **Fenstermodus** in Größe des Bereichs starten; MONIVOX entfernt den Rahmen (Regel „Randlos“). Exklusives Vollbild würde den ganzen Monitor belegen |
+| ⚠️ Spiele auf virtuellen Bereichen | +~1 Bild Latenz, kein G-Sync/FreeSync; randloses Vollbild empfohlen |
+| ❌ DRM auf virtuellen Bereichen | schwarz – Windows/Streamingdienste verhindern das bewusst; dafür gibt es den Direktbereich |
 
 ## Installation (Prototyp)
 

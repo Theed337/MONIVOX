@@ -93,6 +93,9 @@
                                 <Button Content="⇆ Teilen" Click="SplitV_Click" VerticalAlignment="Bottom"/>
                                 <Button Content="⇅ Teilen" Click="SplitH_Click" VerticalAlignment="Bottom"/>
                                 <Button Content="Entfernen" Click="Remove_Click" VerticalAlignment="Bottom"/>
+                                <CheckBox x:Name="DirectBox" VerticalAlignment="Bottom" Margin="8,0,0,6" Click="DirectBox_Click"
+                                          Content="★ Direktbereich – keine Latenz, G-Sync, DRM"
+                                          ToolTip="Dieser Bereich zeigt den echten Monitor (nicht virtuell). Ideal für Spiele und Filme. Nur ein Direktbereich pro Monitor."/>
                             </WrapPanel>
                             <TextBlock x:Name="ValidationText" Foreground="{DynamicResource Danger}" Margin="0,8,0,0" TextWrapping="Wrap"/>
                         </StackPanel>
@@ -137,6 +140,7 @@
                             <CheckBox x:Name="AutostartBox" Content="Mit Windows starten (im Infobereich unten rechts)" Click="Settings_Changed"/>
                             <CheckBox x:Name="SplitOnStartBox" Content="Beim Start sofort das letzte Profil aktivieren (Bildschirme entstehen automatisch)" Click="Settings_Changed"/>
                             <CheckBox x:Name="AutoUpdateBox" Content="Updates automatisch installieren" Click="Settings_Changed"/>
+                            <CheckBox x:Name="FramesBox" Content="Farbige Rahmen um die Bereiche anzeigen (auch per Tray oder Strg + Alt + Shift + F)" Click="Frames_Click"/>
                         </StackPanel>
                     </Border>
                     <Border Style="{StaticResource Card}">
@@ -145,6 +149,7 @@
                             <TextBlock Style="{StaticResource Sub}" Margin="0,6,0,0" Text="• Fenster schließen: MONIVOX läuft im Infobereich weiter (unten rechts in der Taskleiste)."/>
                             <TextBlock Style="{StaticResource Sub}" Text="• Doppelklick auf das Symbol öffnet dieses Fenster, Rechtsklick zeigt Schnellbefehle (Teilen starten/beenden, Profil wechseln)."/>
                             <TextBlock Style="{StaticResource Sub}" Text="• Not-Aus: Strg + Alt + Shift + Q beendet die Aufteilung sofort und stellt alles wieder her."/>
+                            <TextBlock Style="{StaticResource Sub}" Text="• Direktbereich (grün ★): zeigt den echten Monitor – keine Zusatzlatenz, G-Sync/FreeSync und Netflix &amp; Co. funktionieren. Spiele dort im Fenstermodus mit der Größe des Bereichs betreiben (MONIVOX entfernt den Rahmen über eine Programmregel „Randlos“)."/>
                         </StackPanel>
                     </Border>
                     <Border Style="{StaticResource Card}">

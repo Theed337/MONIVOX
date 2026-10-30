@@ -71,6 +71,8 @@ public sealed record SettingsDocument
     public bool SplitOnStartup { get; init; } = true;
     /// <summary>Updates automatisch laden und installieren.</summary>
     public bool AutoUpdate { get; init; } = true;
+    /// <summary>Farbige Rahmen um die Bereiche anzeigen.</summary>
+    public bool ShowFrames { get; init; }
 }
 
 /// <summary>Lädt und speichert Profile als JSON (atomar über eine temporäre Datei).</summary>

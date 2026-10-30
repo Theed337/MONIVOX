@@ -9,7 +9,8 @@ public sealed record SplitOptions(
     Layout Layout,
     string? PhysicalDevice = null,
     int RefreshHz = 0,
-    string CompositorPath = "MonivoxCompositor.exe");
+    string CompositorPath = "MonivoxCompositor.exe",
+    bool ShowFrames = false);
 
 /// <summary>Gesicherte Anordnung vor dem Split – wird von <see cref="SplitSession.Stop"/> wiederhergestellt.</summary>
 public sealed record RestoreState(string PhysicalDevice, PixelRect PhysicalBounds, bool PhysicalWasPrimary,
@@ -95,7 +96,7 @@ public sealed class SplitSession(SplitOptions options, Action<string> log)
         else if (options.PhysicalDevice is { } wanted && !restore.PhysicalDevice.EndsWith(wanted, StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException(
-                $"Es läuft noch eine Aufteilung von {restore.PhysicalDevice}. Bitte zuerst 'monivox stop' ausführen.");
+                $"Es läuft noch eine Aufteilung von {restore.PhysicalDevice}. Bitte die Aufteilung zuerst beenden.");
         }
 
         var current = all.FirstOrDefault(d => d.DeviceName == restore.PhysicalDevice)
@@ -106,27 +107,38 @@ public sealed class SplitSession(SplitOptions options, Action<string> log)
         if (errors.Count > 0) throw new InvalidOperationException(string.Join(Environment.NewLine, errors));
 
         int hz = options.RefreshHz > 0 ? options.RefreshHz : physicalMode.RefreshHz;
-        var specs = LayoutResolver.Resolve(options.Layout, physicalMode with { RefreshHz = hz });
+        var layout = options.Layout;
+        var specs = LayoutResolver.Resolve(layout, physicalMode with { RefreshHz = hz });
+        var virtualSpecs = specs.Where(s => !layout.HasDirect || s.Index != layout.DirectIndex).ToList();
         log($"Aufgeteilt wird: {restore.PhysicalDevice} ({physicalMode}) – andere Monitore bleiben unverändert.");
-        foreach (var s in specs) log($"  Bereich {s.Index + 1}: {s.Dest} -> virtueller Monitor {s.Mode}");
+        foreach (var s in specs)
+        {
+            log(layout.HasDirect && s.Index == layout.DirectIndex
+                ? $"  Bereich {s.Index + 1} „{layout.RegionName(s.Index)}“: {s.Dest} -> DIREKT (keine Latenz, DRM)"
+                : $"  Bereich {s.Index + 1} „{layout.RegionName(s.Index)}“: {s.Dest} -> virtueller Monitor {s.Mode}");
+        }
 
         if (!VddControl.IsInstalled)
             throw new InvalidOperationException("Der Anzeigetreiber ist nicht installiert (Status-Seite → „Treiber installieren“).");
 
-        var modes = specs.Select(s => s.Mode).ToList();
-        if (VddControl.Configure(specs.Count, modes, log)) log("Warte auf virtuelle Monitore …");
-
-        IReadOnlyList<DisplayInfo> virtuals;
-        try
+        // Virtueller Monitor k gehört zu virtualSpecs[k]
+        IReadOnlyList<DisplayInfo> virtuals = [];
+        if (virtualSpecs.Count > 0)
         {
-            virtuals = WaitForVirtualDisplays(specs.Count, TimeSpan.FromSeconds(10));
+            if (VddControl.Configure(virtualSpecs.Count, virtualSpecs.Select(s => s.Mode).ToList(), log))
+                log("Warte auf virtuelle Monitore …");
+            try
+            {
+                virtuals = WaitForVirtualDisplays(virtualSpecs.Count, TimeSpan.FromSeconds(10));
+            }
+            catch (InvalidOperationException)
+            {
+                // Manche Treiberversionen übernehmen die Monitoranzahl erst nach einem Geräteneustart.
+                VddControl.RestartDevice(log);
+                virtuals = WaitForVirtualDisplays(virtualSpecs.Count, TimeSpan.FromSeconds(20));
+            }
         }
-        catch (InvalidOperationException)
-        {
-            // Manche Treiberversionen übernehmen die Monitoranzahl erst nach einem Geräteneustart.
-            VddControl.RestartDevice(log);
-            virtuals = WaitForVirtualDisplays(specs.Count, TimeSpan.FromSeconds(20));
-        }
+        var deviceOf = virtualSpecs.Select((spec, k) => (spec.Index, virtuals[k].DeviceName)).ToDictionary(x => x.Index, x => x.DeviceName);
 
         // Andere Monitore an ihrer ursprünglichen Position (aus der Sicherung, nicht der aktuellen –
         // nach einem Neustart könnte sich der Ursprung verschoben haben).
@@ -137,37 +149,53 @@ public sealed class SplitSession(SplitOptions options, Action<string> log)
             .Select(x => new DesktopArrangement.OtherDisplay(x.Entry.DeviceName,
                 new PixelRect(x.Entry.X, x.Entry.Y, x.Info!.Bounds.Width, x.Info.Bounds.Height), x.Entry.Primary))
             .ToList();
-
-        var plan = DesktopArrangement.Create(specs, restore.PhysicalBounds with
-        {
-            Width = physicalMode.Width,
-            Height = physicalMode.Height,
-        }, restore.PhysicalWasPrimary, others);
+        var physicalBounds = restore.PhysicalBounds with { Width = physicalMode.Width, Height = physicalMode.Height };
 
         var placements = new List<DisplayArranger.Placement>();
-        foreach (var v in plan.Virtuals)
+        (int X, int Y)? panelOrigin = null;
+        if (layout.HasDirect)
         {
-            placements.Add(new(virtuals[v.Index].DeviceName, v.X, v.Y, v.Mode, v.Primary));
+            // Direktbereich: physischer Monitor bleibt, wo er ist; virtuelle Monitore als Block daneben
+            var plan = DirectArrangement.Create(virtualSpecs, specs[layout.DirectIndex].Dest, physicalBounds, restore.PhysicalWasPrimary, others);
+            foreach (var v in plan.Virtuals) placements.Add(new(deviceOf[v.Index], v.X, v.Y, v.Mode, false));
+            foreach (var o in plan.Others) placements.Add(new(o.DeviceName, o.Bounds.X, o.Bounds.Y, null, o.IsPrimary));
+            placements.Add(new(restore.PhysicalDevice, plan.Physical.X, plan.Physical.Y, null, plan.PhysicalPrimary));
         }
-        foreach (var o in plan.Others) placements.Add(new(o.DeviceName, o.Bounds.X, o.Bounds.Y, null, o.IsPrimary));
-        placements.Add(new(restore.PhysicalDevice, plan.ParkedPhysical.X, plan.ParkedPhysical.Y, null, false));
+        else
+        {
+            var plan = DesktopArrangement.Create(specs, physicalBounds, restore.PhysicalWasPrimary, others);
+            if (VirtualBlock.CanMirror(specs))
+            {
+                var v0 = plan.Virtuals[0];
+                panelOrigin = (v0.X - specs[v0.Index].Dest.X, v0.Y - specs[v0.Index].Dest.Y);
+            }
+            foreach (var v in plan.Virtuals) placements.Add(new(deviceOf[v.Index], v.X, v.Y, v.Mode, v.Primary));
+            foreach (var o in plan.Others) placements.Add(new(o.DeviceName, o.Bounds.X, o.Bounds.Y, null, o.IsPrimary));
+            placements.Add(new(restore.PhysicalDevice, plan.ParkedPhysical.X, plan.ParkedPhysical.Y, null, false));
+        }
         DisplayArranger.Apply(placements);
         log("Monitore angeordnet.");
 
         // Nach dem Umschalten tatsächliche Modi prüfen
         var after = Displays.Enumerate();
-        foreach (var spec in specs)
+        foreach (var spec in virtualSpecs)
         {
-            var actual = after.First(d => d.DeviceName == virtuals[spec.Index].DeviceName);
+            var actual = after.First(d => d.DeviceName == deviceOf[spec.Index]);
             if (actual.Mode.Width != spec.Mode.Width || actual.Mode.Height != spec.Mode.Height)
-                log($"  Hinweis: Monitor {spec.Index + 1} läuft mit {actual.Mode} statt {spec.Mode} – Bild wird skaliert.");
+                log($"  Hinweis: Bereich {spec.Index + 1} läuft mit {actual.Mode} statt {spec.Mode} – Bild wird skaliert.");
         }
 
         Directory.CreateDirectory(RuntimeDirectory);
         File.WriteAllText(CompositorConfigPath, CompositorConfig.Build(restore.PhysicalDevice,
-            specs.Select(s => (virtuals[s.Index].DeviceName, s.Dest))));
+            virtualSpecs.Select(s => new CompositorConfig.View(deviceOf[s.Index], s.Dest, layout.RegionName(s.Index))),
+            layout.HasDirect ? (specs[layout.DirectIndex].Dest, layout.RegionName(layout.DirectIndex)) : null,
+            options.ShowFrames, panelOrigin));
 
-        Ready?.Invoke(specs.Select(s => after.First(d => d.DeviceName == virtuals[s.Index].DeviceName).Bounds).ToList());
+        // Desktop-Koordinaten je Bereich (für die Programmregeln) – der Direktbereich liegt auf dem echten Monitor
+        var physicalNow = after.First(d => d.DeviceName == restore.PhysicalDevice).Bounds;
+        Ready?.Invoke(specs.Select(s => layout.HasDirect && s.Index == layout.DirectIndex
+            ? s.Dest.Offset(physicalNow.X, physicalNow.Y)
+            : after.First(d => d.DeviceName == deviceOf[s.Index]).Bounds).ToList());
     }
 
     private IReadOnlyList<DisplayInfo> WaitForVirtualDisplays(int count, TimeSpan timeout)

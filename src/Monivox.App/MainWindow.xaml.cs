@@ -56,6 +56,8 @@ public partial class MainWindow : Window
         AutostartBox.IsChecked = SafeAutostartEnabled();
         SplitOnStartBox.IsChecked = controller.Settings.SplitOnStartup;
         AutoUpdateBox.IsChecked = controller.Settings.AutoUpdate;
+        FramesBox.IsChecked = controller.Settings.ShowFrames;
+        controller.StateChanged += () => Dispatcher.BeginInvoke(() => FramesBox.IsChecked = _controller.Settings.ShowFrames);
 
         RefreshDriver();
         RefreshAntiCheat();
@@ -302,6 +304,7 @@ public partial class MainWindow : Window
         {
             SelectionTitle.Text = "Kein Bereich gewählt – klicke einen Bereich an oder ziehe einen neuen auf.";
             NameBox.Text = XBox.Text = YBox.Text = WBox.Text = HBox.Text = "";
+            DirectBox.IsChecked = false;
             return;
         }
         var r = Editor.Regions[i];
@@ -313,6 +316,7 @@ public partial class MainWindow : Window
         YBox.Text = ((int)Math.Round(r.Y * h)).ToString(CultureInfo.InvariantCulture);
         WBox.Text = ((int)Math.Round(r.Width * w)).ToString(CultureInfo.InvariantCulture);
         HBox.Text = ((int)Math.Round(r.Height * h)).ToString(CultureInfo.InvariantCulture);
+        DirectBox.IsChecked = Editor.DirectIndex == i;
         _loading = false;
     }
 
@@ -328,6 +332,18 @@ public partial class MainWindow : Window
         int x = Parse(XBox), y = Parse(YBox), rw = Parse(WBox), rh = Parse(HBox);
         if (x < 0 || y < 0 || rw <= 0 || rh <= 0) { ShowSelection(); return; }
         Editor.SetRegion(i, new NormRect((double)x / w, (double)y / h, (double)rw / w, (double)rh / h));
+    }
+
+    private void DirectBox_Click(object sender, RoutedEventArgs e)
+    {
+        int i = Editor.SelectedIndex;
+        if (i < 0) return;
+        Editor.DirectIndex = DirectBox.IsChecked == true ? i : (Editor.DirectIndex == i ? -1 : Editor.DirectIndex);
+    }
+
+    private void Frames_Click(object sender, RoutedEventArgs e)
+    {
+        if ((FramesBox.IsChecked == true) != _controller.Settings.ShowFrames) _controller.ToggleFrames();
     }
 
     private void SplitV_Click(object sender, RoutedEventArgs e) => Editor.SplitSelected(vertical: true);

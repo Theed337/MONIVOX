@@ -37,8 +37,9 @@ public static class DesktopArrangement
         if (specs.Count == 0) throw new ArgumentException("Keine virtuellen Monitore.", nameof(specs));
 
         // 1. Virtuelle Monitore genau dort, wo der physische Monitor war
-        var virtuals = specs
-            .Select(s => new VirtualPlacement(s.Index, physicalBounds.X + s.Dest.X, physicalBounds.Y + s.Dest.Y, s.Mode, false))
+        var modes = specs.ToDictionary(s => s.Index, s => s.Mode);
+        var virtuals = VirtualBlock.Offsets(specs)
+            .Select(o => new VirtualPlacement(o.Index, physicalBounds.X + o.X, physicalBounds.Y + o.Y, modes[o.Index], false))
             .ToList();
         var otherList = others.ToList();
 

@@ -22,6 +22,7 @@ public sealed class LayoutEditor : FrameworkElement
     private readonly List<NormRect> _regions = [];
     private readonly List<string> _names = [];
     private int _selected = -1;
+    private int _direct = -1;
     private Edge _drag;
     private Point _dragStart;
     private NormRect _dragOrigin;
@@ -43,6 +44,13 @@ public sealed class LayoutEditor : FrameworkElement
     public IReadOnlyList<NormRect> Regions => _regions;
     public IReadOnlyList<string> Names => _names;
 
+    /// <summary>Index des Direktbereichs (echtes Monitorbild, keine Latenz, DRM) oder -1.</summary>
+    public int DirectIndex
+    {
+        get => _direct;
+        set { _direct = value; InvalidateVisual(); Changed?.Invoke(); }
+    }
+
     public int SelectedIndex
     {
         get => _selected;
@@ -55,11 +63,12 @@ public sealed class LayoutEditor : FrameworkElement
         _regions.AddRange(layout.Regions);
         _names.Clear();
         for (int i = 0; i < _regions.Count; i++) _names.Add(layout.RegionName(i));
+        _direct = layout.HasDirect ? layout.DirectIndex : -1;
         SelectedIndex = _regions.Count > 0 ? 0 : -1;
         InvalidateVisual();
     }
 
-    public Layout ToLayout(string name) => new(name, _regions) { Names = _names.ToList() };
+    public Layout ToLayout(string name) => new(name, _regions) { Names = _names.ToList(), DirectIndex = _direct };
 
     public void SetRegion(int index, NormRect rect)
     {
@@ -89,6 +98,8 @@ public sealed class LayoutEditor : FrameworkElement
         if (_selected < 0) return;
         _regions.RemoveAt(_selected);
         _names.RemoveAt(_selected);
+        if (_direct == _selected) _direct = -1;
+        else if (_direct > _selected) _direct--;
         SelectedIndex = Math.Min(_selected, _regions.Count - 1);
         Changed?.Invoke();
     }
@@ -113,6 +124,7 @@ public sealed class LayoutEditor : FrameworkElement
         }
         _regions[_selected] = a;
         _regions.Insert(_selected + 1, b);
+        if (_direct > _selected) _direct++;
         _names.Insert(_selected + 1, $"Bereich {_regions.Count}");
         SelectedIndex = _selected + 1;
         Changed?.Invoke();
@@ -321,13 +333,15 @@ public sealed class LayoutEditor : FrameworkElement
         {
             var r = ToScreen(_regions[i]);
             bool sel = i == _selected;
-            var baseColor = overlaps.Contains(i) ? danger : accent;
+            bool direct = i == _direct;
+            var baseColor = overlaps.Contains(i) ? danger : direct ? Color.FromRgb(0x22, 0xC5, 0x5E) : accent;
             var fill = new SolidColorBrush(Color.FromArgb(sel ? (byte)120 : (byte)70, baseColor.R, baseColor.G, baseColor.B));
             var pen = new Pen(new SolidColorBrush(baseColor), sel ? 2.5 : 1.2);
             dc.DrawRoundedRectangle(fill, pen, new Rect(r.X + 1, r.Y + 1, Math.Max(0, r.Width - 2), Math.Max(0, r.Height - 2)), 4, 4);
 
             int pw = (int)Math.Round(_regions[i].Width * PhysicalWidth), ph = (int)Math.Round(_regions[i].Height * PhysicalHeight);
-            var label = new FormattedText($"{i + 1}  {_names[i]}\n{pw} × {ph}", CultureInfo.CurrentUICulture, FlowDirection.LeftToRight,
+            string kind = direct ? "★ DIREKT – keine Latenz, DRM ✓" : "virtuell";
+            var label = new FormattedText($"{i + 1}  {_names[i]}\n{pw} × {ph} · {kind}", CultureInfo.CurrentUICulture, FlowDirection.LeftToRight,
                 new Typeface("Segoe UI"), 12, Brushes.White, dpi) { MaxTextWidth = Math.Max(10, r.Width - 12), MaxTextHeight = Math.Max(10, r.Height - 8) };
             dc.DrawText(label, new Point(r.X + 8, r.Y + 6));
 

@@ -146,6 +146,10 @@ public partial class App : Application
             profiles.DropDownItems.Add(item);
         }
         menu.Items.Add(profiles);
+        menu.Items.Add(new Forms.ToolStripMenuItem("Rahmen anzeigen (Strg+Alt+Shift+F)", null, (_, _) => Controller.ToggleFrames())
+        {
+            Checked = Controller.Settings.ShowFrames,
+        });
 
         menu.Items.Add(new Forms.ToolStripSeparator());
         menu.Items.Add("Einstellungen öffnen", null, (_, _) => ShowMainWindow());

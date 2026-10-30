@@ -27,9 +27,10 @@ Legende: ✅ erledigt · 🔨 Code fertig, CI grün, auf Hardware ungetestet · 
 - ⬜ Tastenkombinationen zum Profilwechsel
 
 ## Phase 5 – Gaming, DRM & Stabilität ⬜
-- ⬜ **Direktbereich für DRM-Videos und null Latenz**: ein Bereich pro Monitor wird nicht virtualisiert, sondern zeigt
-  den echten Monitor (Netflix & Co. funktionieren dort, keine Zusatzlatenz). Braucht eine Maus-Übergabe zwischen
-  Direktbereich und virtuellen Bereichen.
+- 🔨 **Direktbereich** (echter Monitor, keine Latenz, DRM) mit Maus-Brücke (Raw Input + SetCursorPos, keine Hooks)
+  und angepasstem Arbeitsbereich (Maximieren füllt genau den Direktbereich)
+- 🔨 Farbige, ein-/ausblendbare Rahmen mit Beschriftung (nicht in Aufnahmen sichtbar)
+- ⬜ Taskleiste: liegt sie unten auf dem aufgeteilten Monitor und ist der untere Teil virtuell, ist sie verdeckt
 - ⬜ Mehrere Monitore gleichzeitig aufteilen
 - ⬜ `MinUpdateInterval` (Windows 11 24H2) für > 60 fps in virtuellen Bereichen
 - ⬜ Spieletests (DX11/DX12/Vulkan, Borderless/Exklusiv), Ergebnisliste
