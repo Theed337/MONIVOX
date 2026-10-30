@@ -27,6 +27,8 @@
 #include <d3d11_4.h>
 #include <dxgi1_6.h>
 #include <mmsystem.h>
+#include <dwmapi.h>
+#include <map>
 #include <d3dcompiler.h>
 #include <wrl/client.h>
 
@@ -397,6 +399,9 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
         std::vector<HWND> m_HiddenTaskbars;
         std::vector<HMONITOR> m_WorkFixed;
         void UpdateTaskbars();
+        void FitDirectWindows();
+        struct FitState { ULONGLONG First = 0; int Count = 0; };
+        std::map<HWND, FitState> m_FitTries;
         void RestoreTaskbars();
         int m_WorkAreaResets = 0;
 
@@ -933,6 +938,77 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
                 }
             }
         }
+    }
+
+    // Direktbereich-Wächter: Windows kennt den Direktbereich nicht. Maximierte Fenster füllen sonst den ganzen
+    // Monitor (Arbeitsbereich wird vom System zurückgesetzt) und Vollbild-Videos (YouTube, Netflix) sowie
+    // randlose Spiele den gesamten Bildschirm – man sähe nur einen Ausschnitt. Solche Fenster werden genau
+    // auf den Direktbereich gesetzt. Nur normale Fenster-APIs (SetWindowPos), keine Hooks.
+    void Compositor::FitDirectWindows()
+    {
+        if (!m_Cfg.Direct) return;
+        const RECT target = m_DirectScreen;
+        const RECT mon = m_Physical.Rect;
+        ULONGLONG now = GetTickCount64();
+        DWORD ownPid = GetCurrentProcessId();
+
+        struct Ctx { Compositor* Self; RECT Target; RECT Mon; ULONGLONG Now; DWORD OwnPid; } ctx{ this, target, mon, now, ownPid };
+        EnumWindows([](HWND hwnd, LPARAM lp) -> BOOL
+        {
+            auto& c = *reinterpret_cast<Ctx*>(lp);
+            if (!IsWindowVisible(hwnd) || IsIconic(hwnd) || GetAncestor(hwnd, GA_ROOT) != hwnd) return TRUE;
+            if (GetWindow(hwnd, GW_OWNER)) return TRUE;
+            LONG_PTR ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+            if (ex & WS_EX_TOOLWINDOW) return TRUE;
+            DWORD pid = 0;
+            GetWindowThreadProcessId(hwnd, &pid);
+            if (pid == c.OwnPid) return TRUE;
+            int cloaked = 0;
+            if (SUCCEEDED(DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))) && cloaked) return TRUE;
+            wchar_t cls[64]{};
+            GetClassNameW(hwnd, cls, 64);
+            if (!wcscmp(cls, L"Progman") || !wcscmp(cls, L"WorkerW") || !wcscmp(cls, L"Shell_TrayWnd") ||
+                !wcscmp(cls, L"Shell_SecondaryTrayWnd")) return TRUE;
+            if (MonitorFromWindow(hwnd, MONITOR_DEFAULTTONULL) != c.Self->m_Physical.Handle) return TRUE;
+
+            RECT wr{}, frame{};
+            if (!GetWindowRect(hwnd, &wr)) return TRUE;
+            if (FAILED(DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &frame, sizeof(frame)))) frame = wr;
+
+            bool zoomed = IsZoomed(hwnd) != FALSE;
+            // Vollbild: deckt (fast) den ganzen Monitor ab
+            bool fullscreen = frame.left <= c.Mon.left + 1 && frame.top <= c.Mon.top + 1 &&
+                              frame.right >= c.Mon.right - 1 && frame.bottom >= c.Mon.bottom - 49;
+            if (!zoomed && !fullscreen) return TRUE;
+            // Mittelpunkt muss im Direktbereich liegen bzw. das Fenster den ganzen Monitor belegen
+            if (!fullscreen)
+            {
+                POINT center{ (frame.left + frame.right) / 2, (frame.top + frame.bottom) / 2 };
+                bool covers = frame.right - frame.left > (c.Target.right - c.Target.left) + 4 ||
+                              frame.bottom - frame.top > (c.Target.bottom - c.Target.top) + 4;
+                if (!covers && !PtInRect(&c.Target, center)) return TRUE;
+            }
+            if (std::abs(frame.left - c.Target.left) <= 2 && std::abs(frame.top - c.Target.top) <= 2 &&
+                std::abs(frame.right - c.Target.right) <= 2 && std::abs(frame.bottom - c.Target.bottom) <= 2) return TRUE;
+
+            // Nicht gegen Programme ankämpfen, die sich immer wieder selbst vergrößern
+            auto& t = c.Self->m_FitTries[hwnd];
+            if (c.Now - t.First > 15000) { t.First = c.Now; t.Count = 0; }
+            if (++t.Count > 4) return TRUE;
+
+            // Unsichtbaren Rahmen (DWM) mit einrechnen, damit der sichtbare Teil genau passt
+            RECT r{ c.Target.left - (frame.left - wr.left), c.Target.top - (frame.top - wr.top),
+                    c.Target.right + (wr.right - frame.right), c.Target.bottom + (wr.bottom - frame.bottom) };
+            SetWindowPos(hwnd, nullptr, r.left, r.top, r.right - r.left, r.bottom - r.top,
+                         SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_ASYNCWINDOWPOS);
+            if (t.Count == 1)
+                Log(L"Fenster \"%s\" (%s) in den Direktbereich eingepasst", cls, fullscreen ? L"Vollbild" : L"maximiert");
+            return TRUE;
+        }, reinterpret_cast<LPARAM>(&ctx));
+
+        // Einträge geschlossener Fenster aufräumen
+        for (auto it = m_FitTries.begin(); it != m_FitTries.end();)
+            it = IsWindow(it->first) ? std::next(it) : m_FitTries.erase(it);
     }
 
     void Compositor::RestoreTaskbars()
@@ -1501,6 +1577,8 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
                 ULONGLONG now = GetTickCount64();
                 if (now - lastWork > 5000) { lastWork = now; self->ApplyWorkArea(); }
                 if (now - lastTaskbar > 1000) { lastTaskbar = now; self->UpdateTaskbars(); }
+                static ULONGLONG lastFit = 0;
+                if (now - lastFit > 200) { lastFit = now; self->FitDirectWindows(); }
                 self->LogStats();
             }
             return 0;

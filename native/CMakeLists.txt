@@ -14,7 +14,7 @@ add_compile_definitions(UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN _WIN32_WIN
 
 # Compositor: zeigt virtuelle Monitore auf dem physischen Monitor an
 add_executable(MonivoxCompositor WIN32 src/compositor.cpp)
-target_link_libraries(MonivoxCompositor PRIVATE d3d11 dxgi d3dcompiler windowsapp winmm)
+target_link_libraries(MonivoxCompositor PRIVATE d3d11 dxgi d3dcompiler windowsapp winmm dwmapi)
 
 # Werkzeug zum Anlegen/Entfernen des Software-Geräts für den Treiber
 add_executable(MonivoxDevice src/devicetool.cpp)
