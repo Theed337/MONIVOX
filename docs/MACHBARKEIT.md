@@ -90,12 +90,12 @@ bessere Wahl.** Das wird in der App ehrlich so angezeigt.
 |---|---|
 | DirectX 9–12, Vulkan, OpenGL | Funktioniert – Spiele rendern auf der GPU, das IDD bekommt das fertige Bild. |
 | Randloses Vollbild (Borderless) | **Funktioniert zuverlässig.** Empfohlener Modus. |
-| Exklusives Vollbild | Wird auf IDD-Monitoren von Windows unterstützt (Modus-Wechsel), aber im Prototyp kann Windows.Graphics.Capture bei manchen Spielen schwarze Frames liefern. Abhilfe: Bildübergabe direkt aus dem Treiber (Phase 5, Backend A). Bis dahin: Spiel auf Borderless stellen. |
+| Exklusives Vollbild | Wird auf IDD-Monitoren von Windows unterstützt (Modus-Wechsel), aber im Prototyp kann Windows.Graphics.Capture bei manchen Spielen schwarze Frames liefern. Bis das in Phase 5 getestet ist: Spiel auf Borderless stellen. |
 | Bildwiederholrate | Virtuelle Monitore können z. B. 144 Hz melden. Sichtbar ist max. die Rate des physischen Monitors; der Compositor präsentiert synchron dazu. |
 | G-Sync / FreeSync | **Nicht durchgereicht.** VRR gilt nur für das Compositor-Fenster, nicht für das Spiel. Dafür ist PbP nötig. |
 | Latenz | +1 Frame (Capture + Komposition), bei 144 Hz ≈ 7 ms. Für Einzelspieler/Casual unkritisch, für kompetitive Shooter spürbar. |
 | Maus/Eingabe | Maus bleibt per `ClipCursor` auf den virtuellen Monitoren; Spiele mit Raw Input funktionieren normal. Spiele, die selbst `ClipCursor` setzen, überschreiben unseren Clip kurz – der Compositor setzt ihn alle 250 ms neu. |
-| Anti-Cheat | Kein Testsignatur-Modus nötig. MONIVOX greift nicht in Spiele ein (kein Injizieren, kein Speicherzugriff, kein eigener Kernel-Treiber); virtuelle Monitore + Bildschirmaufnahme nutzen auch OBS/Parsec/Sunshine. Bann-Fälle dafür sind nicht bekannt, eine Garantie gibt es nicht. `monivox check` warnt bei aktiver Testsignatur und zeigt laufende Anti-Cheats an. |
+| Anti-Cheat | Kein Testsignatur-Modus nötig. MONIVOX greift nicht in Spiele ein (kein Injizieren, kein Speicherzugriff, kein eigener Kernel-Treiber); virtuelle Monitore + Bildschirmaufnahme nutzen auch OBS/Parsec/Sunshine. Bann-Fälle dafür sind nicht bekannt, eine Garantie gibt es nicht. Die Status-Seite warnt bei aktiver Testsignatur und zeigt laufende Anti-Cheats an. |
 | HDR | Prototyp: SDR (BGRA8). HDR (FP16) ist ab Windows 11 im IDD möglich, später. |
 
 **Fazit:** Desktop-Nutzung und Spiele im Borderless-Modus: gut machbar. Kompetitives Gaming mit
@@ -120,7 +120,7 @@ behaupten, dass jedes Spiel auf jedem virtuellen Monitor perfekt läuft.
 
 | Komponente | Technologie | Begründung |
 |---|---|---|
-| Virtueller Display-Treiber | C++, IddCx 1.4, UMDF 2 | Einzige dokumentierte Möglichkeit für echte virtuelle Monitore |
+| Virtueller Display-Treiber | Mitgelieferter Virtual Display Driver (IddCx, signiert) | Echte virtuelle Monitore ohne Testmodus |
 | Compositor | C++20, Win32, Direct3D 11, C++/WinRT (Windows.Graphics.Capture) | Niedrigste Latenz, kein GC, direkter GPU-Zugriff |
 | Kernlogik (Layouts, Profile) | C# / .NET 8, plattformneutral | Gut testbar (auch unter Linux-CI), wartbar |
 | Windows-Integration (Topologie, Fenster) | C# / .NET 8 mit P/Invoke | Display Configuration API + Win32-Fenster-APIs |
@@ -133,9 +133,8 @@ Mica-Hintergrund und eigenen Styles optisch dasselbe Ergebnis.
 
 ## 7. Nachweisplan für Phase 2
 
-1. Treiber bauen (CI), **ohne** Testsignatur bei aktivem Secure Boot installieren → in *Einstellungen → Anzeige* erscheinen 2 neue Monitore. ✅ Kriterium: Windows zeigt sie mit den konfigurierten Auflösungen.
+1. Treiber über die App installieren (Secure Boot an, kein Testmodus) → in *Einstellungen → Anzeige* erscheinen 2 neue Monitore. ✅ Kriterium: Windows zeigt sie mit den konfigurierten Auflösungen.
 2. `monivox apply --preset half` → virtuelle Monitore werden angeordnet, Compositor startet.
    ✅ Kriterium: linke/rechte Hälfte des physischen Monitors zeigen je einen virtuellen Monitor, Maus wechselt zwischen ihnen.
 3. Browser auf Monitor 2 verschieben, Spiel (Borderless) auf Monitor 1 → beide gleichzeitig sichtbar und bedienbar.
-4. Gegenprobe mit Backend B (signierter VDD).
 5. Zwei physische Monitore: nur der gewählte wird aufgeteilt, der andere bleibt unverändert nutzbar.
