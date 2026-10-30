@@ -3,7 +3,6 @@
     <OutputType>Exe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
     <AssemblyName>monivox</AssemblyName>
-    <SupportedOSPlatformVersion>10.0.18362.0</SupportedOSPlatformVersion>
     <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
   <ItemGroup>

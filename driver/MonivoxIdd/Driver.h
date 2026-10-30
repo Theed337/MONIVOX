@@ -80,7 +80,7 @@ namespace Monivox
         IDDCX_SWAPCHAIN m_hSwapChain;
         std::shared_ptr<Direct3DDevice> m_Device;
         HANDLE m_hAvailableBufferEvent;
-        Microsoft::WRL::Wrappers::Thread m_hThread;
+        HANDLE m_hThread = nullptr;
         Microsoft::WRL::Wrappers::Event m_hTerminateEvent;
     };
 

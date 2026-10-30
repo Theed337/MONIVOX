@@ -300,15 +300,17 @@ SwapChainProcessor::SwapChainProcessor(IDDCX_SWAPCHAIN hSwapChain, std::shared_p
     : m_hSwapChain(hSwapChain), m_Device(std::move(device)), m_hAvailableBufferEvent(newFrameEvent)
 {
     m_hTerminateEvent.Attach(CreateEvent(nullptr, FALSE, FALSE, nullptr));
-    m_hThread.Attach(CreateThread(nullptr, 0, RunThread, this, 0, nullptr));
+    m_hThread = CreateThread(nullptr, 0, RunThread, this, 0, nullptr);
 }
 
 SwapChainProcessor::~SwapChainProcessor()
 {
     SetEvent(m_hTerminateEvent.Get());
-    if (m_hThread.Get())
+    if (m_hThread)
     {
-        WaitForSingleObject(m_hThread.Get(), INFINITE);
+        WaitForSingleObject(m_hThread, INFINITE);
+        CloseHandle(m_hThread);
+        m_hThread = nullptr;
     }
 }
 
