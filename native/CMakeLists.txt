@@ -18,4 +18,4 @@ target_link_libraries(MonivoxCompositor PRIVATE d3d11 dxgi d3dcompiler windowsap
 
 # Werkzeug zum Anlegen/Entfernen des Software-Geräts für den Treiber
 add_executable(MonivoxDevice src/devicetool.cpp)
-target_link_libraries(MonivoxDevice PRIVATE cfgmgr32)
+target_link_libraries(MonivoxDevice PRIVATE onecore)

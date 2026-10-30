@@ -29,8 +29,11 @@ jobs:
       - name: Treiber bauen (unsigniert)
         shell: pwsh
         run: |
-          msbuild driver\MonivoxDriver.sln /m /p:Configuration=Release /p:Platform=x64 /p:SignMode=Off /nologo /v:minimal | Tee-Object -FilePath msbuild.log
+          msbuild driver\MonivoxDriver.sln /m /p:Configuration=Release /p:Platform=x64 /p:SignMode=Off /p:EnableInfVerif=false /nologo /v:minimal | Tee-Object -FilePath msbuild.log
           if ($LASTEXITCODE -ne 0) {
+            # Diagnose: wie die WDK-Targets die INF-Prüfung steuern
+            $t = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\build" -Recurse -Filter WindowsDriver.common.targets | Select-Object -First 1
+            if ($t) { Select-String -Path $t.FullName -Pattern "InfVerif" | Select-Object -First 15 | ForEach-Object { Write-Output "::warning::L$($_.LineNumber): $($_.Line.Trim())" } }
             # Fehler als Annotationen ausgeben, damit sie ohne Log-Download sichtbar sind
             Select-String -Path msbuild.log -Pattern ": (fatal )?error |error MSB|error [A-Z]+\d+" | Select-Object -First 30 | ForEach-Object { Write-Output "::error::$($_.Line.Trim())" }
             exit 1
