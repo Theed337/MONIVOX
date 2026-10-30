@@ -20,13 +20,27 @@ public sealed record AppAssignment
     public string? Arguments { get; init; }
     /// <summary>Optionaler regulärer Ausdruck für den Fenstertitel (bei Programmen mit mehreren Fenstern).</summary>
     public string? WindowTitlePattern { get; init; }
-    /// <summary>Index des Layout-Bereichs bzw. virtuellen Monitors.</summary>
+    /// <summary>Text, der im Fenstertitel vorkommen muss (z. B. "YouTube"); leer = jedes Fenster des Programms.</summary>
+    public string? TitleContains { get; init; }
+    /// <summary>Index des Layout-Bereichs bzw. virtuellen Monitors (erster Zielbereich).</summary>
     public int RegionIndex { get; init; }
+    /// <summary>
+    /// Mehrere Zielbereiche: jedes weitere Fenster des Programms kommt auf den nächsten freien Bereich
+    /// (z. B. Browser-Fenster 1 → Bereich 2, Fenster 2 → Bereich 3). Leer = nur <see cref="RegionIndex"/>.
+    /// </summary>
+    public IReadOnlyList<int>? Regions { get; init; }
     public WindowState State { get; init; } = WindowState.Maximized;
     /// <summary>Optionale Position/Größe relativ zum virtuellen Monitor (nur bei <see cref="WindowState.Normal"/>).</summary>
     public PixelRect? Bounds { get; init; }
     /// <summary>Beim Laden des Profils starten, falls nicht schon offen.</summary>
     public bool StartWithProfile { get; init; }
+
+    /// <summary>Alle Zielbereiche in Reihenfolge.</summary>
+    public IReadOnlyList<int> TargetRegions() => Regions is { Count: > 0 } r ? r : [RegionIndex];
+
+    /// <summary>Regel ist auf bestimmte Fenstertitel beschränkt (hat Vorrang vor allgemeinen Regeln).</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool HasTitleFilter => !string.IsNullOrWhiteSpace(TitleContains) || !string.IsNullOrWhiteSpace(WindowTitlePattern);
 }
 
 public sealed record Profile
@@ -51,8 +65,9 @@ public sealed record Profile
         foreach (var app in Apps)
         {
             if (string.IsNullOrWhiteSpace(app.Executable)) errors.Add("Programmzuweisung ohne Programm.");
-            if (app.RegionIndex < 0 || app.RegionIndex >= Layout.Regions.Count)
-                errors.Add($"{app.Executable}: Bereich {app.RegionIndex + 1} existiert im Layout nicht.");
+            foreach (var r in app.TargetRegions())
+                if (r < 0 || r >= Layout.Regions.Count)
+                    errors.Add($"{app.Executable}: Bereich {r + 1} existiert im Layout nicht.");
         }
         return errors;
     }

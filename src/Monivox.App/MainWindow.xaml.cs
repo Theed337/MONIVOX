@@ -26,7 +26,8 @@ public partial class MainWindow : Window
         public string Executable = "";
         public string? Arguments;
         public string? TitlePattern;
-        public int RegionIndex;
+        public string? TitleContains;
+        public List<int> Regions = [];
         public CoreWindowState State = CoreWindowState.Maximized;
         public bool Start;
     }
@@ -113,6 +114,7 @@ public partial class MainWindow : Window
         StatusDot.Fill = (Brush)FindResource(s == SplitState.Running ? "Ok" : "TextDim");
         ToggleButton.Content = s == SplitState.Running ? "Teilen beenden" : "Teilen starten";
         ToggleButton.IsEnabled = s is SplitState.Running or SplitState.Stopped;
+        if (_profiles.Count > 0) SyncAppsProfileBox();
         RefreshUpdate();
     }
 
@@ -162,9 +164,10 @@ public partial class MainWindow : Window
         _rules.Clear();
         _rules.AddRange(p.Apps.Select(a => new RuleRow
         {
-            Executable = a.Executable, Arguments = a.Arguments, TitlePattern = a.WindowTitlePattern,
-            RegionIndex = a.RegionIndex, State = a.State, Start = a.StartWithProfile,
+            Executable = a.Executable, Arguments = a.Arguments, TitlePattern = a.WindowTitlePattern, TitleContains = a.TitleContains,
+            Regions = a.TargetRegions().ToList(), State = a.State, Start = a.StartWithProfile,
         }));
+        SyncAppsProfileBox();
         _loading = false;
         Validate();
         UpdateRegionCount();
@@ -190,12 +193,54 @@ public partial class MainWindow : Window
             PhysicalMonitorId = (MonitorBox.SelectedItem as MonitorItem)?.Device ?? "",
             RefreshHz = Math.Clamp(hz, 0, 500),
             Layout = Editor.ToLayout(Current.Name),
-            Apps = _rules.Where(r => !string.IsNullOrWhiteSpace(r.Executable)).Select(r => new AppAssignment
-            {
-                Executable = r.Executable, Arguments = r.Arguments, WindowTitlePattern = r.TitlePattern,
-                RegionIndex = r.RegionIndex, State = r.State, StartWithProfile = r.Start,
-            }).ToList(),
+            Apps = CaptureRules(),
         };
+    }
+
+    private List<AppAssignment> CaptureRules() =>
+        _rules.Where(r => !string.IsNullOrWhiteSpace(r.Executable)).Select(r => new AppAssignment
+        {
+            Executable = r.Executable, Arguments = r.Arguments, WindowTitlePattern = r.TitlePattern,
+            TitleContains = string.IsNullOrWhiteSpace(r.TitleContains) ? null : r.TitleContains.Trim(),
+            RegionIndex = r.Regions.Count > 0 ? r.Regions[0] : 0,
+            Regions = r.Regions.Count > 1 ? r.Regions.ToList() : null,
+            State = r.State, StartWithProfile = r.Start,
+        }).ToList();
+
+    /// <summary>
+    /// Speichert nur die Programmzuweisungen des aktuellen Profils – sofort bei jeder Änderung, auch wenn das
+    /// Layout gerade ungültig ist (vorher gingen gelöschte Einträge verloren, wenn man nicht „Speichern“ drückte).
+    /// </summary>
+    private void SaveRules()
+    {
+        if (_profiles.Count == 0 || _loading) return;
+        var apps = CaptureRules();
+        _profiles[_current] = Current with { Apps = apps };
+        string name = Current.Name;
+        var saved = _controller.Settings.Profiles.ToList();
+        int idx = saved.FindIndex(p => p.Name == name);
+        if (idx >= 0) saved[idx] = saved[idx] with { Apps = apps };
+        else saved.Add(Current);
+        _controller.SaveSettings(_controller.Settings with { Profiles = saved });
+    }
+
+    private void SyncAppsProfileBox()
+    {
+        bool was = _loading;
+        _loading = true;
+        AppsProfileBox.Items.Clear();
+        foreach (var p in _profiles) AppsProfileBox.Items.Add(p.Name);
+        AppsProfileBox.SelectedIndex = _profiles.Count > 0 ? _current : -1;
+        _loading = was;
+        AppsProfileHint.Text = _profiles.Count > 0 && _controller.State == SplitState.Running && _controller.ActiveProfile?.Name == Current.Name
+            ? "● gerade aktiv"
+            : "Gilt, sobald dieses Profil geteilt wird.";
+    }
+
+    private void AppsProfileBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loading || AppsProfileBox.SelectedIndex < 0 || AppsProfileBox.SelectedIndex == _current) return;
+        ProfileBox.SelectedIndex = AppsProfileBox.SelectedIndex; // löst den normalen Profilwechsel aus
     }
 
     private bool SaveAll()
@@ -252,6 +297,7 @@ public partial class MainWindow : Window
         ProfileBox.Items[_current] = name;
         ProfileBox.SelectedIndex = _current;
         _loading = false;
+        SyncAppsProfileBox();
         SaveAll();
     }
 
@@ -414,7 +460,7 @@ public partial class MainWindow : Window
     private void BuildRules()
     {
         RulesPanel.Children.Clear();
-        var regionNames = Enumerable.Range(0, Editor.Regions.Count).Select(i => $"{i + 1} – {Editor.Names[i]}").ToList();
+        int regionCount = Editor.Regions.Count;
         if (_rules.Count == 0)
         {
             RulesPanel.Children.Add(new TextBlock { Text = "Noch keine Programme zugewiesen.", Foreground = (Brush)FindResource("TextDim") });
@@ -423,8 +469,11 @@ public partial class MainWindow : Window
 
         foreach (var rule in _rules.ToList())
         {
-            var row = new Grid { Margin = new Thickness(0, 0, 0, 10) };
-            foreach (var w in new[] { 2.4, 1.6, 1.6, 1.4, 0.0 })
+            var card = new StackPanel { Margin = new Thickness(0, 0, 0, 16) };
+
+            // Zeile 1: Programm, Fensterzustand, Mit Profil starten, Entfernen
+            var row = new Grid();
+            foreach (var w in new[] { 2.6, 1.6, 1.4, 0.0 })
                 row.ColumnDefinitions.Add(new ColumnDefinition { Width = w == 0 ? GridLength.Auto : new GridLength(w, GridUnitType.Star) });
 
             var name = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
@@ -432,28 +481,53 @@ public partial class MainWindow : Window
             name.Children.Add(new TextBlock { Text = rule.Executable, Style = (Style)FindResource("Sub"), TextTrimming = TextTrimming.CharacterEllipsis });
             row.Children.Add(name);
 
-            var region = new ComboBox { ItemsSource = regionNames, SelectedIndex = Math.Min(rule.RegionIndex, regionNames.Count - 1), Margin = new Thickness(8, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center };
-            region.SelectionChanged += (_, _) => rule.RegionIndex = Math.Max(0, region.SelectedIndex);
-            Grid.SetColumn(region, 1);
-            row.Children.Add(region);
-
             var states = new[] { ("Maximiert", CoreWindowState.Maximized), ("Fenster", CoreWindowState.Normal), ("Randlos Vollbild", CoreWindowState.BorderlessFullscreen), ("Minimiert", CoreWindowState.Minimized) };
-            var state = new ComboBox { ItemsSource = states.Select(s => s.Item1).ToList(), SelectedIndex = Array.FindIndex(states, s => s.Item2 == rule.State), Margin = new Thickness(0, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center };
-            state.SelectionChanged += (_, _) => rule.State = states[Math.Max(0, state.SelectedIndex)].Item2;
-            Grid.SetColumn(state, 2);
+            var state = new ComboBox { ItemsSource = states.Select(s => s.Item1).ToList(), SelectedIndex = Array.FindIndex(states, s => s.Item2 == rule.State), Margin = new Thickness(8, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center };
+            state.SelectionChanged += (_, _) => { rule.State = states[Math.Max(0, state.SelectedIndex)].Item2; SaveRules(); };
+            Grid.SetColumn(state, 1);
             row.Children.Add(state);
 
             var start = new CheckBox { Content = "Mit Profil starten", IsChecked = rule.Start, VerticalAlignment = VerticalAlignment.Center };
-            start.Click += (_, _) => rule.Start = start.IsChecked == true;
-            Grid.SetColumn(start, 3);
+            start.Click += (_, _) => { rule.Start = start.IsChecked == true; SaveRules(); };
+            Grid.SetColumn(start, 2);
             row.Children.Add(start);
 
             var remove = new Button { Content = "Entfernen", Margin = new Thickness(8, 0, 0, 0) };
-            remove.Click += (_, _) => { _rules.Remove(rule); BuildRules(); };
-            Grid.SetColumn(remove, 4);
+            remove.Click += (_, _) => { _rules.Remove(rule); SaveRules(); BuildRules(); };
+            Grid.SetColumn(remove, 3);
             row.Children.Add(remove);
+            card.Children.Add(row);
 
-            RulesPanel.Children.Add(row);
+            // Zeile 2: Bildschirme (mehrere = Fenster werden verteilt) und Titelfilter
+            var line = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
+            line.Children.Add(new TextBlock { Text = "Bildschirme:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) });
+            for (int i = 0; i < regionCount; i++)
+            {
+                int idx = i;
+                var box = new CheckBox
+                {
+                    Content = $"{i + 1}", IsChecked = rule.Regions.Contains(i), Margin = new Thickness(0, 0, 10, 0),
+                    VerticalAlignment = VerticalAlignment.Center, ToolTip = Editor.Names[i],
+                };
+                box.Click += (_, _) =>
+                {
+                    if (box.IsChecked == true) { if (!rule.Regions.Contains(idx)) rule.Regions.Add(idx); }
+                    else if (rule.Regions.Count > 1) rule.Regions.Remove(idx);
+                    else box.IsChecked = true; // mindestens ein Bildschirm
+                    SaveRules();
+                };
+                line.Children.Add(box);
+            }
+            if (rule.Regions.Any(r => r >= regionCount))
+                line.Children.Add(new TextBlock { Text = "(Bereich existiert im Layout nicht mehr)", Foreground = (Brush)FindResource("TextDim"), VerticalAlignment = VerticalAlignment.Center });
+
+            line.Children.Add(new TextBlock { Text = "Titel enthält:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(16, 0, 8, 0) });
+            var title = new TextBox { Text = rule.TitleContains ?? "", Width = 200, VerticalAlignment = VerticalAlignment.Center, ToolTip = "Optional. Nur Fenster, deren Titel diesen Text enthält (mehrere mit ; trennen). Leer = alle Fenster des Programms." };
+            title.LostFocus += (_, _) => { if ((rule.TitleContains ?? "") != title.Text) { rule.TitleContains = title.Text; SaveRules(); } };
+            line.Children.Add(title);
+            card.Children.Add(line);
+
+            RulesPanel.Children.Add(card);
         }
     }
 
@@ -485,14 +559,10 @@ public partial class MainWindow : Window
 
     private void AddRule(string exe)
     {
-        if (_rules.Any(r => string.Equals(r.Executable, exe, StringComparison.OrdinalIgnoreCase))) return;
-        _rules.Add(new RuleRow { Executable = exe, RegionIndex = Math.Max(0, Editor.SelectedIndex) });
+        // Dasselbe Programm darf mehrfach vorkommen (z. B. Browser: "YouTube" → Bereich 3, alle anderen → 1 und 2)
+        _rules.Add(new RuleRow { Executable = exe, Regions = [Math.Max(0, Editor.SelectedIndex)] });
+        SaveRules();
         BuildRules();
-    }
-
-    private void SaveApps_Click(object sender, RoutedEventArgs e)
-    {
-        if (SaveAll()) _controller.AddLog($"Programmzuweisungen für „{Current.Name}“ gespeichert.");
     }
 
     // ================================================================ Einstellungen

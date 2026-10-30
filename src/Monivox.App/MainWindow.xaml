@@ -81,7 +81,7 @@
                             <Button Content="Alle Bereiche löschen" Click="ClearRegions_Click" Margin="0"/>
                         </StackPanel>
                         <TextBlock x:Name="RegionCountText" Style="{StaticResource Sub}" VerticalAlignment="Center"
-                                   Text="Ziehe mit der Maus auf dem Monitor Bereiche auf. Kanten und Ecken lassen sich verschieben."/>
+                                   Text="Ziehe mit der Maus Bereiche auf. Kanten rasten an Rändern, Hälften, Dritteln, Vierteln und anderen Bereichen ein (gelbe Linie). Gemeinsame Kanten wandern mit. Umschalt = frei ziehen, Alt = Kante allein."/>
                     </DockPanel>
                 </StackPanel>
 
@@ -122,7 +122,12 @@
             <DockPanel x:Name="PageApps" Visibility="Collapsed">
                 <StackPanel DockPanel.Dock="Top">
                     <TextBlock Style="{StaticResource H1}" Text="Programme"/>
-                    <TextBlock Style="{StaticResource Sub}" Text="Lege fest, welches Programm auf welchem Bildschirm erscheint. Sobald es sich öffnet, schiebt MONIVOX es an seinen Platz – auch nach einem Neustart des Programms. Gilt für das oben gewählte Profil."/>
+                    <TextBlock Style="{StaticResource Sub}" Text="Lege fest, welches Programm auf welchem Bildschirm erscheint. Sobald es sich öffnet, schiebt MONIVOX es an seinen Platz. Wählst du mehrere Bildschirme, kommt jedes weitere Fenster des Programms auf den nächsten (z. B. jedes Browser-Fenster auf einen anderen Bildschirm). Änderungen werden sofort gespeichert."/>
+                    <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                        <TextBlock Text="Profil:" VerticalAlignment="Center" Margin="0,0,8,0" FontWeight="SemiBold"/>
+                        <ComboBox x:Name="AppsProfileBox" Width="220" SelectionChanged="AppsProfileBox_SelectionChanged"/>
+                        <TextBlock x:Name="AppsProfileHint" Style="{StaticResource Sub}" VerticalAlignment="Center" Margin="12,0,0,0"/>
+                    </StackPanel>
                     <WrapPanel Margin="0,12,0,12">
                         <Button Style="{StaticResource Primary}" Content="Programm (.exe) hinzufügen…" Click="AddExe_Click"/>
                         <Button Content="Aus laufenden Programmen…" Click="AddRunning_Click"/>
@@ -130,9 +135,8 @@
                 </StackPanel>
                 <Border DockPanel.Dock="Bottom" Style="{StaticResource Card}" Margin="0,12,0,0">
                     <DockPanel>
-                        <Button DockPanel.Dock="Right" Style="{StaticResource Primary}" Content="Speichern" Click="SaveApps_Click" Margin="0"/>
-                        <TextBlock Style="{StaticResource Sub}" VerticalAlignment="Center"
-                                   Text="Tipp Spiele: Bildschirm im Spiel selbst wählen und „Randloses Vollbild“ einstellen – das ist am zuverlässigsten."/>
+                        <TextBlock Style="{StaticResource Sub}" VerticalAlignment="Center" TextWrapping="Wrap"
+                                   Text="Browser-Tabs: Ein Tab, den du aus dem Browser herausziehst, wird ein eigenes Fenster und springt auf den nächsten gewählten Bildschirm. Mit „Titel enthält“ (z. B. YouTube; Twitch) bekommen bestimmte Fenster einen festen Platz. Spiele: im Spiel den Bildschirm wählen und „Randloses Vollbild“ einstellen."/>
                     </DockPanel>
                 </Border>
                 <Border Style="{StaticResource Card}" Margin="0">

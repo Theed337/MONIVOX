@@ -346,6 +346,8 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
         std::optional<POINT> LayoutOf(const Location& loc, POINT p) const;
         std::optional<POINT> ToDesktop(POINT layout) const;
         bool ForeignClipActive() const;
+        mutable bool m_ForeignLogged = false;
+        long m_Handovers = 0, m_HandoverFails = 0;
         void Teleport(POINT p);
         void SetOwnClip(const RECT* r);
         std::optional<RECT> m_OwnClip;
@@ -1057,6 +1059,10 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
         Log(L"Leistung: %.1f Aufnahmen/s, %.1f Bilder/s, längste Pause %u ms, Present Ø %.2f ms, Maus-Brücke %s",
             frames / secs, m_StatPresents / secs, maxGap, m_StatPresents ? m_StatRenderMs / m_StatPresents : 0.0,
             m_UseRawInput ? L"Raw Input" : L"leicht");
+        if (m_Handovers || m_HandoverFails)
+            Log(L"Mausübergaben zwischen Bereichen: %ld, nicht möglich: %ld", m_Handovers, m_HandoverFails);
+        m_Handovers = 0;
+        m_HandoverFails = 0;
         m_StatsStart = now;
         m_StatPresents = 0;
         m_StatRenderMs = 0;
@@ -1292,9 +1298,22 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
         RECT all{ GetSystemMetrics(SM_XVIRTUALSCREEN), GetSystemMetrics(SM_YVIRTUALSCREEN), 0, 0 };
         all.right = all.left + GetSystemMetrics(SM_CXVIRTUALSCREEN);
         all.bottom = all.top + GetSystemMetrics(SM_CYVIRTUALSCREEN);
-        if (EqualRect(&clip, &all)) return false;
-        if (m_OwnClip && EqualRect(&clip, &*m_OwnClip)) return false; // unsere eigene Begrenzung
-        return true;
+        bool foreign = true;
+        if (EqualRect(&clip, &all)) foreign = false;
+        else if (m_OwnClip && EqualRect(&clip, &*m_OwnClip)) foreign = false; // unsere eigene Begrenzung
+        // Begrenzungen, die den ganzen aufgeteilten Monitor einschließen, stammen nicht von einem Spiel
+        // (z. B. setzt Windows beim Ziehen eines Fensters eine Begrenzung auf den Desktop). Früher hat sich
+        // die Brücke dann herausgehalten – das war die "unsichtbare Wand" beim Fensterziehen.
+        else if (clip.left <= m_Physical.Rect.left && clip.top <= m_Physical.Rect.top &&
+                 clip.right >= m_Physical.Rect.right && clip.bottom >= m_Physical.Rect.bottom) foreign = false;
+
+        if (foreign != m_ForeignLogged)
+        {
+            m_ForeignLogged = foreign;
+            if (foreign) Log(L"Fremde Mausbegrenzung (Spiel?) %ld,%ld–%ld,%ld – Maus-Brücke pausiert", clip.left, clip.top, clip.right, clip.bottom);
+            else Log(L"Fremde Mausbegrenzung aufgehoben – Maus-Brücke aktiv");
+        }
+        return foreign;
     }
 
     // Hält die Maus im aktuellen Bereich (Direktbereich bzw. virtueller Monitor). Am Rand übergibt die Brücke
@@ -1330,15 +1349,20 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
         auto accept = [&] { m_LastPos = p; m_LastLoc = loc; };
 
         const LONG sx = (dx > 0) - (dx < 0), sy = (dy > 0) - (dy < 0);
+        // Die am Rand "verschluckte" Bewegung wird im Nachbarbereich weitergegeben, damit sich der Übergang
+        // genauso anfühlt wie zwischen zwei normalen Monitoren (kein kurzes Hängenbleiben an der Kante).
+        const LONG carryX = sx * std::clamp<LONG>(std::abs(dx), 1, 64), carryY = sy * std::clamp<LONG>(std::abs(dy), 1, 64);
         auto stepFrom = [&](const Location& from, POINT at) -> bool
         {
             auto l = LayoutOf(from, at);
-            if (!l) return false;
-            POINT next{ l->x + sx, l->y + sy };
-            auto target = ToDesktop(next);
-            if (!target) return false;
-            if (from.Kind == AreaKind::Virtual && Contains(m_Views[from.View]->Source.Rect, *target)) return false;
+            if (!l) { ++m_HandoverFails; return false; }
+            std::optional<POINT> target = ToDesktop(POINT{ l->x + carryX, l->y + carryY });
+            if (!target || (from.Kind == AreaKind::Virtual && Contains(m_Views[from.View]->Source.Rect, *target)))
+                target = ToDesktop(POINT{ l->x + sx, l->y + sy }); // Fallback: genau ein Pixel weiter
+            if (!target) { ++m_HandoverFails; return false; }
+            if (from.Kind == AreaKind::Virtual && Contains(m_Views[from.View]->Source.Rect, *target)) { ++m_HandoverFails; return false; }
             Teleport(*target);
+            ++m_Handovers;
             return true;
         };
 

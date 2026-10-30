@@ -28,6 +28,11 @@ public sealed class LayoutEditor : FrameworkElement
     private Point _dragStart;
     private NormRect _dragOrigin;
     private bool _creating;
+    // Nachbarn, deren Kante beim Ziehen mitwandert (gemeinsame Kante): Index, betroffene Kante, Ausgangslage
+    private readonly List<(int Index, Edge Edge, NormRect Origin)> _linked = [];
+    // Aktive Einrastlinien (normiert) – werden beim Ziehen als Hilfslinien gezeichnet
+    private readonly List<double> _guidesX = [], _guidesY = [];
+    private bool _noSnap;
 
     public int PhysicalWidth { get; set; } = 3840;
     public int PhysicalHeight { get; set; } = 2160;
@@ -203,21 +208,65 @@ public sealed class LayoutEditor : FrameworkElement
         return new NormRect(sx, sy, SnapX(x + w) - sx, SnapY(y + h) - sy);
     }
 
-    /// <summary>Rastet einen Wert an Monitorrand oder Kanten anderer Bereiche ein (8 Bildschirmpixel Toleranz).</summary>
-    private double Magnet(double value, bool horizontal, int ignore)
+    private static readonly double[] GridSteps = [0, 1, 0.5, 1.0 / 3, 2.0 / 3, 0.25, 0.75, 1.0 / 6, 5.0 / 6];
+
+    /// <summary>
+    /// Rastet einen Wert ein: Monitorrand, Hälften/Drittel/Viertel und Kanten anderer Bereiche
+    /// (14 Bildschirmpixel Toleranz). Gibt zurück, ob eingerastet wurde. Umschalt gedrückt = frei.
+    /// </summary>
+    private double Magnet(double value, bool horizontal, int ignore, out bool snapped)
     {
+        snapped = false;
+        if (_noSnap) return value;
         var m = MonitorRect();
-        double tol = 8 / (horizontal ? m.Width : m.Height);
-        var candidates = new List<double> { 0, 1, 0.5 };
+        double tol = 14 / (horizontal ? m.Width : m.Height);
+        double best = value, bestDist = double.MaxValue;
+        void Try(double c, double bonus)
+        {
+            // Kanten anderer Bereiche bevorzugen (bonus < 1 = "näher")
+            double d = Math.Abs(c - value) * bonus;
+            if (d < bestDist) { bestDist = d; best = c; }
+        }
+        foreach (var g in GridSteps) Try(g, 1);
         for (int i = 0; i < _regions.Count; i++)
         {
-            if (i == ignore) continue;
+            if (i == ignore || _linked.Any(l => l.Index == i)) continue;
             var r = _regions[i];
-            if (horizontal) { candidates.Add(r.X); candidates.Add(r.Right); }
-            else { candidates.Add(r.Y); candidates.Add(r.Bottom); }
+            if (horizontal) { Try(r.X, 0.6); Try(r.Right, 0.6); }
+            else { Try(r.Y, 0.6); Try(r.Bottom, 0.6); }
         }
-        var best = candidates.OrderBy(c => Math.Abs(c - value)).First();
-        return Math.Abs(best - value) <= tol ? best : value;
+        if (Math.Abs(best - value) > tol) return value;
+        snapped = true;
+        return best;
+    }
+
+    private double MagnetGuide(double value, bool horizontal, int ignore)
+    {
+        double v = Magnet(value, horizontal, ignore, out bool snapped);
+        if (snapped) (horizontal ? _guidesX : _guidesY).Add(v);
+        return v;
+    }
+
+    /// <summary>Sucht Nachbarn, die eine gezogene Kante teilen – sie wandern mit (Alt gedrückt = nicht).</summary>
+    private void FindLinked(int index, Edge drag)
+    {
+        _linked.Clear();
+        if (drag == Edge.Move || drag == Edge.None || Keyboard.Modifiers.HasFlag(ModifierKeys.Alt)) return;
+        var me = _regions[index];
+        double ex = 1.5 / PhysicalWidth, ey = 1.5 / PhysicalHeight;
+        bool OverlapY(NormRect o) => o.Y < me.Bottom - ey && me.Y < o.Bottom - ey;
+        bool OverlapX(NormRect o) => o.X < me.Right - ex && me.X < o.Right - ex;
+        for (int i = 0; i < _regions.Count; i++)
+        {
+            if (i == index) continue;
+            var o = _regions[i];
+            Edge e = Edge.None;
+            if (drag.HasFlag(Edge.Right) && OverlapY(o) && Math.Abs(o.X - me.Right) <= ex) e |= Edge.Left;
+            if (drag.HasFlag(Edge.Left) && OverlapY(o) && Math.Abs(o.Right - me.X) <= ex) e |= Edge.Right;
+            if (drag.HasFlag(Edge.Bottom) && OverlapX(o) && Math.Abs(o.Y - me.Bottom) <= ey) e |= Edge.Top;
+            if (drag.HasFlag(Edge.Top) && OverlapX(o) && Math.Abs(o.Bottom - me.Y) <= ey) e |= Edge.Bottom;
+            if (e != Edge.None) _linked.Add((i, e, o));
+        }
     }
 
     private Edge HitTestEdges(Rect r, Point p)
@@ -262,6 +311,7 @@ public sealed class LayoutEditor : FrameworkElement
             SelectedIndex = index;
             _drag = edge;
             _dragOrigin = _regions[index];
+            FindLinked(index, edge);
         }
         else if (MonitorRect().Contains(p) && _regions.Count < Layout.MaxRegions)
         {
@@ -296,29 +346,67 @@ public sealed class LayoutEditor : FrameworkElement
         }
 
         var m = MonitorRect();
+        _noSnap = Keyboard.Modifiers.HasFlag(ModifierKeys.Shift);
+        _guidesX.Clear();
+        _guidesY.Clear();
         double dx = (p.X - _dragStart.X) / m.Width, dy = (p.Y - _dragStart.Y) / m.Height;
         var o = _dragOrigin;
         double left = o.X, top = o.Y, right = o.Right, bottom = o.Bottom;
 
         if (_drag == Edge.Move)
         {
-            double nl = Magnet(left + dx, true, _selected);
-            double nr = Magnet(right + dx, true, _selected);
-            double shiftX = Math.Abs(nl - (left + dx)) <= Math.Abs(nr - (right + dx)) ? nl - left : nr - right;
-            double nt = Magnet(top + dy, false, _selected);
-            double nb = Magnet(bottom + dy, false, _selected);
-            double shiftY = Math.Abs(nt - (top + dy)) <= Math.Abs(nb - (bottom + dy)) ? nt - top : nb - bottom;
+            double nl = Magnet(left + dx, true, _selected, out bool sl);
+            double nr = Magnet(right + dx, true, _selected, out bool sr);
+            double shiftX = dx;
+            if (sl && (!sr || Math.Abs(nl - (left + dx)) <= Math.Abs(nr - (right + dx)))) { shiftX = nl - left; _guidesX.Add(nl); }
+            else if (sr) { shiftX = nr - right; _guidesX.Add(nr); }
+            double nt = Magnet(top + dy, false, _selected, out bool st);
+            double nb = Magnet(bottom + dy, false, _selected, out bool sb);
+            double shiftY = dy;
+            if (st && (!sb || Math.Abs(nt - (top + dy)) <= Math.Abs(nb - (bottom + dy)))) { shiftY = nt - top; _guidesY.Add(nt); }
+            else if (sb) { shiftY = nb - bottom; _guidesY.Add(nb); }
             _regions[_selected] = Clamp(new NormRect(left + shiftX, top + shiftY, o.Width, o.Height));
         }
         else
         {
-            if (_drag.HasFlag(Edge.Left)) left = Magnet(left + dx, true, _selected);
-            if (_drag.HasFlag(Edge.Right)) right = Magnet(right + dx, true, _selected);
-            if (_drag.HasFlag(Edge.Top)) top = Magnet(top + dy, false, _selected);
-            if (_drag.HasFlag(Edge.Bottom)) bottom = Magnet(bottom + dy, false, _selected);
-            if (right < left) (left, right) = (right, left);
-            if (bottom < top) (top, bottom) = (bottom, top);
-            _regions[_selected] = Clamp(new NormRect(left, top, right - left, bottom - top));
+            double minW = (double)Layout.MinRegionWidth / PhysicalWidth, minH = (double)Layout.MinRegionHeight / PhysicalHeight;
+            if (_drag.HasFlag(Edge.Left)) left = MagnetGuide(left + dx, true, _selected);
+            if (_drag.HasFlag(Edge.Right)) right = MagnetGuide(right + dx, true, _selected);
+            if (_drag.HasFlag(Edge.Top)) top = MagnetGuide(top + dy, false, _selected);
+            if (_drag.HasFlag(Edge.Bottom)) bottom = MagnetGuide(bottom + dy, false, _selected);
+            if (_creating)
+            {
+                if (right < left) (left, right) = (right, left);
+                if (bottom < top) (top, bottom) = (bottom, top);
+            }
+            else
+            {
+                // Beim Größenändern nicht "umklappen" – Mindestgröße halten
+                if (_drag.HasFlag(Edge.Left)) left = Math.Min(left, right - minW);
+                if (_drag.HasFlag(Edge.Right)) right = Math.Max(right, left + minW);
+                if (_drag.HasFlag(Edge.Top)) top = Math.Min(top, bottom - minH);
+                if (_drag.HasFlag(Edge.Bottom)) bottom = Math.Max(bottom, top + minH);
+            }
+
+            // Gemeinsame Kanten: Nachbarn wandern mit, solange sie ihre Mindestgröße behalten
+            foreach (var (i, e, n) in _linked)
+            {
+                if (e.HasFlag(Edge.Left)) right = Math.Min(right, n.Right - minW);
+                if (e.HasFlag(Edge.Right)) left = Math.Max(left, n.X + minW);
+                if (e.HasFlag(Edge.Top)) bottom = Math.Min(bottom, n.Bottom - minH);
+                if (e.HasFlag(Edge.Bottom)) top = Math.Max(top, n.Y + minH);
+            }
+            var mine = Clamp(new NormRect(left, top, right - left, bottom - top));
+            _regions[_selected] = mine;
+            foreach (var (i, e, n) in _linked)
+            {
+                double l = n.X, t = n.Y, r = n.Right, b = n.Bottom;
+                if (e.HasFlag(Edge.Left)) l = mine.Right;
+                if (e.HasFlag(Edge.Right)) r = mine.X;
+                if (e.HasFlag(Edge.Top)) t = mine.Bottom;
+                if (e.HasFlag(Edge.Bottom)) b = mine.Y;
+                _regions[i] = Clamp(new NormRect(l, t, r - l, b - t));
+            }
         }
         InvalidateVisual();
         SelectionChanged?.Invoke();
@@ -338,6 +426,9 @@ public sealed class LayoutEditor : FrameworkElement
             SelectionChanged?.Invoke();
         }
         _drag = Edge.None;
+        _linked.Clear();
+        _guidesX.Clear();
+        _guidesY.Clear();
         InvalidateVisual();
         Changed?.Invoke();
     }
@@ -404,6 +495,20 @@ public sealed class LayoutEditor : FrameworkElement
                 foreach (var c in new[] { r.TopLeft, r.TopRight, r.BottomLeft, r.BottomRight })
                     dc.DrawEllipse(Brushes.White, pen, c, 4, 4);
             }
+        }
+
+        if (_drag != Edge.None && IsMouseCaptured)
+        {
+            // Dezentes Raster (Hälften/Drittel/Viertel) und aktive Einrastlinien
+            var grid = new Pen(new SolidColorBrush(Color.FromArgb(40, 255, 255, 255)), 1);
+            foreach (var g in GridSteps.Skip(2))
+            {
+                dc.DrawLine(grid, new Point(m.X + g * m.Width, m.Y), new Point(m.X + g * m.Width, m.Bottom));
+                dc.DrawLine(grid, new Point(m.X, m.Y + g * m.Height), new Point(m.Right, m.Y + g * m.Height));
+            }
+            var guide = new Pen(new SolidColorBrush(Color.FromRgb(0xFA, 0xCC, 0x15)), 1.5) { DashStyle = DashStyles.Dash };
+            foreach (var gx in _guidesX) dc.DrawLine(guide, new Point(m.X + gx * m.Width, m.Y), new Point(m.X + gx * m.Width, m.Bottom));
+            foreach (var gy in _guidesY) dc.DrawLine(guide, new Point(m.X, m.Y + gy * m.Height), new Point(m.Right, m.Y + gy * m.Height));
         }
 
         if (_regions.Count == 0)

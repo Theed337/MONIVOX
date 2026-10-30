@@ -319,4 +319,28 @@ public class ProfileStoreTests
         Assert.Equal("Arbeit", back.Name);
         Assert.Equal(4, back.Layout.Regions.Count);
     }
+
+    [Fact]
+    public void AppAssignment_MultipleRegions_RoundTrip()
+    {
+        var p = new Profile
+        {
+            Name = "Browser", Layout = LayoutPresets.Grid2x2,
+            Apps = [new AppAssignment { Executable = "chrome.exe", RegionIndex = 1, Regions = [1, 2, 3], TitleContains = "YouTube" }],
+        };
+        var back = ProfileStore.Import(ProfileStore.Export(p));
+        var app = Assert.Single(back.Apps);
+        Assert.Equal([1, 2, 3], app.TargetRegions());
+        Assert.Equal("YouTube", app.TitleContains);
+        Assert.True(app.HasTitleFilter);
+        Assert.Empty(back.Validate());
+    }
+
+    [Fact]
+    public void AppAssignment_WithoutRegions_UsesRegionIndex()
+    {
+        var a = new AppAssignment { Executable = "discord.exe", RegionIndex = 2 };
+        Assert.Equal([2], a.TargetRegions());
+        Assert.False(a.HasTitleFilter);
+    }
 }

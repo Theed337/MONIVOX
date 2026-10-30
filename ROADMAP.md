@@ -17,6 +17,7 @@ Legende: ✅ erledigt · 🔨 Code fertig, CI grün, auf Hardware ungetestet · 
 ## Phase 3 – Oberfläche 🔨
 - 🔨 WPF-App im Windows-11-Stil (hell/dunkel), Infobereich mit Doppelklick/Rechtsklick-Menü
 - 🔨 Freier Editor ohne Vorlagen, bis zu 24 Bereiche (Aufziehen, Verschieben, Kanten, Einrasten, pixelgenaue Eingabe)
+- 🔨 Einrasten überarbeitet: Hälften/Drittel/Viertel, Hilfslinien, gemeinsame Kanten wandern mit (Umschalt = frei, Alt = allein)
 - 🔨 Überarbeitete Oberfläche: größere Schrift, hoher Kontrast, eigene Auswahllisten (vorher unlesbar)
 - 🔨 Profile: anlegen, umbenennen, löschen, Export/Import, Wechsel aus dem Tray
 - 🔨 Status-Seite: Treiber installieren, Anti-Cheat-Check, Protokoll
@@ -25,6 +26,9 @@ Legende: ✅ erledigt · 🔨 Code fertig, CI grün, auf Hardware ungetestet · 
 ## Phase 4 – Fensterverwaltung 🔨
 - 🔨 Programme Bereichen zuweisen (Fenster wird beim Öffnen platziert: maximiert/Fenster/randlos/minimiert)
 - 🔨 Programme mit Profil starten (ohne Adminrechte über den Explorer)
+- 🔨 Mehrere Bildschirme pro Programm: jedes weitere Fenster (z. B. Browser) kommt auf den nächsten Bildschirm
+- 🔨 „Titel enthält“-Filter (z. B. YouTube), herausgezogene Browser-Tabs werden nach dem Loslassen platziert
+- 🔨 Programme-Seite mit eigener Profilauswahl, Änderungen werden sofort gespeichert
 - ⬜ Tastenkombinationen zum Profilwechsel
 
 ## Phase 5 – Gaming, DRM & Stabilität ⬜

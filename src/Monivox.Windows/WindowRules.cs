@@ -19,10 +19,15 @@ public sealed class WindowRules : IDisposable
     private readonly Action<string> _log;
     private readonly Action<Action> _post;
     private readonly WinEventDelegate _callback;
-    private IntPtr _hook;
+    private IntPtr _hook, _nameHook;
     private IReadOnlyList<AppAssignment> _rules = [];
     private IReadOnlyList<PixelRect> _regions = [];
-    private readonly HashSet<IntPtr> _placed = [];
+    // Platzierte Fenster: Fenster → (Regel, Bereich). Dient zum Verteilen mehrerer Fenster eines Programms.
+    private readonly Dictionary<IntPtr, (int Rule, int Region)> _placed = [];
+    // Frisch geöffnete Fenster (Zeitpunkt): Titeländerungen werden kurz nach dem Öffnen noch ausgewertet,
+    // damit z. B. ein Browser-Fenster, dessen Titel erst nach dem Laden "YouTube" enthält, richtig landet.
+    private readonly Dictionary<IntPtr, long> _fresh = [];
+    private const long FreshMs = 10_000;
 
     /// <param name="post">Führt eine Aktion verzögert auf dem UI-Thread aus (für die kurze Wartezeit nach dem Öffnen).</param>
     public WindowRules(Action<string> log, Action<Action> post)
@@ -37,6 +42,8 @@ public sealed class WindowRules : IDisposable
         if (_hook != IntPtr.Zero) return;
         _hook = SetWinEventHook(EVENT_OBJECT_SHOW, EVENT_OBJECT_SHOW, IntPtr.Zero, _callback, 0, 0,
                                 WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+        _nameHook = SetWinEventHook(EVENT_OBJECT_NAMECHANGE, EVENT_OBJECT_NAMECHANGE, IntPtr.Zero, _callback, 0, 0,
+                                    WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
     }
 
     /// <summary>Neue Regeln/Bereiche übernehmen und bereits offene Fenster einsortieren.</summary>
@@ -44,14 +51,19 @@ public sealed class WindowRules : IDisposable
     /// Hauptmonitor geholt werden – z. B. die virtuellen Monitore und der aufgeteilte Monitor. Leer = nichts holen.</param>
     public void Apply(IReadOnlyList<AppAssignment> rules, IReadOnlyList<PixelRect> regions, IReadOnlyList<PixelRect>? gatherFrom = null)
     {
-        _rules = rules;
+        // Regeln mit Titelfilter zuerst – sie haben Vorrang vor "alle Fenster des Programms"
+        _rules = rules.OrderBy(r => r.HasTitleFilter ? 0 : 1).ToList();
         _regions = regions;
         _placed.Clear();
+        _fresh.Clear();
 
         if (gatherFrom is { Count: > 0 }) GatherUnassigned(gatherFrom);
         if (rules.Count == 0 || regions.Count == 0) return;
 
-        EnumWindows((hwnd, _) => { TryPlace(hwnd); return true; }, IntPtr.Zero);
+        // Bereits offene Fenster einsortieren (älteste zuerst, damit die Verteilung stabil bleibt)
+        var open = new List<IntPtr>();
+        EnumWindows((hwnd, _) => { open.Add(hwnd); return true; }, IntPtr.Zero);
+        for (int i = open.Count - 1; i >= 0; i--) TryPlace(open[i], 0);
         StartMissingApps();
     }
 
@@ -173,6 +185,7 @@ public sealed class WindowRules : IDisposable
         _rules = [];
         _regions = [];
         _placed.Clear();
+        _fresh.Clear();
     }
 
     private void StartMissingApps()
@@ -205,13 +218,29 @@ public sealed class WindowRules : IDisposable
     private void OnWinEvent(IntPtr hook, uint evt, IntPtr hwnd, int idObject, int idChild, uint thread, uint time)
     {
         if (idObject != OBJID_WINDOW || idChild != 0 || hwnd == IntPtr.Zero || _rules.Count == 0) return;
-        // Viele Programme setzen Größe/Position direkt nach dem Anzeigen selbst – kurz warten.
-        _post(() => TryPlace(hwnd));
+        long now = Environment.TickCount64;
+        if (evt == EVENT_OBJECT_SHOW)
+        {
+            if (GetAncestor(hwnd, GA_ROOT) != hwnd) return;
+            _fresh[hwnd] = now;
+            // Viele Programme setzen Größe/Position direkt nach dem Anzeigen selbst – kurz warten.
+            _post(() => TryPlace(hwnd, 0));
+        }
+        else if (evt == EVENT_OBJECT_NAMECHANGE)
+        {
+            // Nur frisch geöffnete Fenster neu bewerten – sonst würde ein Fenster beim Tab-Wechsel hin- und herspringen.
+            if (!_fresh.TryGetValue(hwnd, out long shown) || now - shown > FreshMs) return;
+            if (!_rules.Any(r => r.HasTitleFilter)) return;
+            _post(() => TryPlace(hwnd, 0, retitle: true));
+        }
     }
 
-    private void TryPlace(IntPtr hwnd)
+    private void TryPlace(IntPtr hwnd, int attempt, bool retitle = false)
     {
-        if (_placed.Contains(hwnd) || !IsWindowVisible(hwnd) || GetAncestor(hwnd, GA_ROOT) != hwnd) return;
+        PruneFresh();
+        if (!IsWindowVisible(hwnd) || GetAncestor(hwnd, GA_ROOT) != hwnd) return;
+        bool already = _placed.TryGetValue(hwnd, out var current);
+        if (already && !retitle) return;
         long exStyle = GetWindowLongPtr(hwnd, GWL_EXSTYLE).ToInt64();
         if ((exStyle & WS_EX_TOOLWINDOW) != 0) return;
         if (GetWindow(hwnd, GW_OWNER) != IntPtr.Zero) return; // Dialoge bleiben beim Hauptfenster
@@ -221,15 +250,56 @@ public sealed class WindowRules : IDisposable
         if (path is null) return;
         string title = WindowTitle(hwnd);
 
-        foreach (var rule in _rules)
+        for (int i = 0; i < _rules.Count; i++)
         {
+            var rule = _rules[i];
             if (!Matches(rule, path, title)) continue;
-            if (rule.RegionIndex < 0 || rule.RegionIndex >= _regions.Count) return;
-            _placed.Add(hwnd);
-            Place(hwnd, _regions[rule.RegionIndex], rule);
-            _log($"{Path.GetFileName(path)} → Bereich {rule.RegionIndex + 1}");
+            if (already)
+            {
+                // Titel hat sich geändert: nur umziehen, wenn jetzt eine speziellere Regel passt
+                if (i == current.Rule || !rule.HasTitleFilter) return;
+            }
+
+            // Ein Tab wird gerade aus dem Browser herausgezogen (Maustaste gedrückt) – erst nach dem Loslassen platzieren
+            if ((GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0 && attempt < 120)
+            {
+                _post(() => TryPlace(hwnd, attempt + 1, retitle));
+                return;
+            }
+
+            int region = ChooseRegion(i, rule, hwnd);
+            if (region < 0) return;
+            _placed[hwnd] = (i, region);
+            Place(hwnd, _regions[region], rule);
+            _log($"{Path.GetFileName(path)} → Bereich {region + 1}");
             return;
         }
+    }
+
+    /// <summary>
+    /// Wählt den Bereich für ein neues Fenster: bei mehreren Zielbereichen den mit den wenigsten Fenstern
+    /// dieser Regel (bei Gleichstand den ersten). So landet jedes weitere Fenster eines Programms automatisch
+    /// auf dem nächsten Bildschirm.
+    /// </summary>
+    private int ChooseRegion(int ruleIndex, AppAssignment rule, IntPtr hwnd)
+    {
+        var targets = rule.TargetRegions().Where(r => r >= 0 && r < _regions.Count).Distinct().ToList();
+        if (targets.Count == 0) return -1;
+        if (targets.Count == 1) return targets[0];
+
+        foreach (var dead in _placed.Keys.Where(h => !IsWindow(h) || !IsWindowVisible(h)).ToList()) _placed.Remove(dead);
+        var counts = targets.ToDictionary(t => t, _ => 0);
+        foreach (var (h, p) in _placed)
+            if (h != hwnd && p.Rule == ruleIndex && counts.ContainsKey(p.Region)) counts[p.Region]++;
+        int min = counts.Values.Min();
+        return targets.First(t => counts[t] == min);
+    }
+
+    private void PruneFresh()
+    {
+        if (_fresh.Count < 64) return;
+        long now = Environment.TickCount64;
+        foreach (var h in _fresh.Where(kv => now - kv.Value > FreshMs).Select(kv => kv.Key).ToList()) _fresh.Remove(h);
     }
 
     public static bool Matches(AppAssignment rule, string processPath, string title)
@@ -240,6 +310,10 @@ public sealed class WindowRules : IDisposable
             : string.Equals(Path.GetFileName(processPath), wanted.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? wanted : wanted + ".exe",
                             StringComparison.OrdinalIgnoreCase);
         if (!exeMatch) return false;
+        if (!string.IsNullOrWhiteSpace(rule.TitleContains) &&
+            !rule.TitleContains.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                 .Any(t => title.Contains(t, StringComparison.OrdinalIgnoreCase)))
+            return false;
         if (string.IsNullOrWhiteSpace(rule.WindowTitlePattern)) return true;
         try { return Regex.IsMatch(title, rule.WindowTitlePattern, RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(50)); }
         catch (ArgumentException) { return false; }
@@ -303,6 +377,11 @@ public sealed class WindowRules : IDisposable
             UnhookWinEvent(_hook);
             _hook = IntPtr.Zero;
         }
+        if (_nameHook != IntPtr.Zero)
+        {
+            UnhookWinEvent(_nameHook);
+            _nameHook = IntPtr.Zero;
+        }
     }
 
     // ---- Win32 ----
@@ -329,7 +408,10 @@ public sealed class WindowRules : IDisposable
     private delegate void WinEventDelegate(IntPtr hWinEventHook, uint eventType, IntPtr hwnd, int idObject, int idChild, uint dwEventThread, uint dwmsEventTime);
     private delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lParam);
 
-    private const uint EVENT_OBJECT_SHOW = 0x8002;
+    private const uint EVENT_OBJECT_SHOW = 0x8002, EVENT_OBJECT_NAMECHANGE = 0x800C;
+    private const int VK_LBUTTON = 0x01;
+    [DllImport("user32.dll")] private static extern short GetAsyncKeyState(int key);
+    [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool IsWindow(IntPtr hwnd);
     private const uint WINEVENT_OUTOFCONTEXT = 0x0000, WINEVENT_SKIPOWNPROCESS = 0x0002;
     private const int OBJID_WINDOW = 0;
     private const uint GA_ROOT = 2, GW_OWNER = 4;
