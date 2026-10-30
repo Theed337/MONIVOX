@@ -389,22 +389,22 @@ public sealed class LayoutEditor : FrameworkElement
             }
 
             // Gemeinsame Kanten: Nachbarn wandern mit, solange sie ihre Mindestgröße behalten
-            foreach (var (i, e, n) in _linked)
+            foreach (var (li, le, n) in _linked)
             {
-                if (e.HasFlag(Edge.Left)) right = Math.Min(right, n.Right - minW);
-                if (e.HasFlag(Edge.Right)) left = Math.Max(left, n.X + minW);
-                if (e.HasFlag(Edge.Top)) bottom = Math.Min(bottom, n.Bottom - minH);
-                if (e.HasFlag(Edge.Bottom)) top = Math.Max(top, n.Y + minH);
+                if (le.HasFlag(Edge.Left)) right = Math.Min(right, n.Right - minW);
+                if (le.HasFlag(Edge.Right)) left = Math.Max(left, n.X + minW);
+                if (le.HasFlag(Edge.Top)) bottom = Math.Min(bottom, n.Bottom - minH);
+                if (le.HasFlag(Edge.Bottom)) top = Math.Max(top, n.Y + minH);
             }
             var mine = Clamp(new NormRect(left, top, right - left, bottom - top));
             _regions[_selected] = mine;
-            foreach (var (i, e, n) in _linked)
+            foreach (var (li, le, n) in _linked)
             {
                 double l = n.X, t = n.Y, r = n.Right, b = n.Bottom;
-                if (e.HasFlag(Edge.Left)) l = mine.Right;
-                if (e.HasFlag(Edge.Right)) r = mine.X;
-                if (e.HasFlag(Edge.Top)) t = mine.Bottom;
-                if (e.HasFlag(Edge.Bottom)) b = mine.Y;
+                if (le.HasFlag(Edge.Left)) l = mine.Right;
+                if (le.HasFlag(Edge.Right)) r = mine.X;
+                if (le.HasFlag(Edge.Top)) t = mine.Bottom;
+                if (le.HasFlag(Edge.Bottom)) b = mine.Y;
                 _regions[i] = Clamp(new NormRect(l, t, r - l, b - t));
             }
         }
