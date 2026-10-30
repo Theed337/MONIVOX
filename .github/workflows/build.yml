@@ -27,7 +27,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: microsoft/setup-msbuild@v2
       - name: Treiber bauen (unsigniert)
-        run: msbuild driver\MonivoxDriver.sln /m /p:Configuration=Release /p:Platform=x64 /p:SignMode=Off
+        shell: pwsh
+        run: |
+          msbuild driver\MonivoxDriver.sln /m /p:Configuration=Release /p:Platform=x64 /p:SignMode=Off /nologo /v:minimal | Tee-Object -FilePath msbuild.log
+          if ($LASTEXITCODE -ne 0) {
+            # Fehler als Annotationen ausgeben, damit sie ohne Log-Download sichtbar sind
+            Select-String -Path msbuild.log -Pattern ": (fatal )?error |error MSB|error [A-Z]+\d+" | Select-Object -First 30 | ForEach-Object { Write-Output "::error::$($_.Line.Trim())" }
+            exit 1
+          }
       - name: Treiber signieren (Einweg-Zertifikat, keine Testsignatur nötig)
         shell: pwsh
         run: |
@@ -75,9 +82,14 @@ jobs:
         with:
           dotnet-version: 8.0.x
       - name: Native Komponenten (CMake/MSVC)
+        shell: pwsh
         run: |
           cmake -S native -B build\native -A x64
-          cmake --build build\native --config Release
+          cmake --build build\native --config Release -- /nologo /v:minimal | Tee-Object -FilePath cmake.log
+          if ($LASTEXITCODE -ne 0) {
+            Select-String -Path cmake.log -Pattern ": (fatal )?error |error MSB|error [A-Z]+\d+" | Select-Object -First 30 | ForEach-Object { Write-Output "::error::$($_.Line.Trim())" }
+            exit 1
+          }
       - name: CLI veröffentlichen
         run: dotnet publish src\Monivox.Cli -c Release -r win-x64 --self-contained false -o dist\Monivox -p:Version=${{ env.MONIVOX_VERSION }}
       - name: Zusammenstellen

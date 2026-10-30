@@ -17,6 +17,7 @@
 // Not-Aus: Strg+Alt+Shift+Q beendet den Compositor und gibt die Maus frei.
 
 #include <windows.h>
+#include <shellapi.h>
 #include <d3d11_4.h>
 #include <dxgi1_3.h>
 #include <d3dcompiler.h>
