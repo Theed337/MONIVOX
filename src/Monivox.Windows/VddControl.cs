@@ -135,9 +135,12 @@ public static class VddControl
     }
 
     /// <summary>
-    /// Stellt sicher, dass genug virtuelle Monitore mit den benötigten Modi existieren, und lädt den Treiber
-    /// bei Bedarf neu. Gibt true zurück, wenn ein Neuladen ausgelöst wurde.
+    /// Stellt die gewünschte Zahl virtueller Monitore bereit – jeder an einem EIGENEN Treibergerät.
+    /// Hintergrund: Mehrere Monitore an einem Gerät lassen Windows auf allen Monitoren ruckeln (bekannter Fehler
+    /// des Virtual Display Driver, upstream Issue #140). Nicht benötigte Geräte werden deaktiviert, damit der
+    /// Treiber keinerlei Last erzeugt.
     /// </summary>
+    /// <returns>true, wenn sich etwas geändert hat und auf die Monitore gewartet werden muss.</returns>
     public static bool Configure(int monitorCount, IReadOnlyCollection<DisplayMode> modes, Action<string> log)
     {
         EnsureSettingsFile();
@@ -149,25 +152,90 @@ public static class VddControl
             doc = VddSettings.CreateDefault();
         }
 
-        if (!VddSettings.Apply(doc, monitorCount, modes)) return false;
-        doc.Save(SettingsPath);
-        log($"Anzeigetreiber: {monitorCount} virtuelle Monitore, Modi {string.Join(", ", modes.Distinct())}.");
-        Reload(log);
-        return true;
+        // Jedes Gerät liest dieselbe Datei: genau 1 Monitor pro Gerät, alle benötigten Modi
+        bool settingsChanged = VddSettings.Apply(doc, 1, modes);
+        if (settingsChanged) doc.Save(SettingsPath);
+
+        var instances = EnsureDeviceCount(monitorCount, log);
+        bool changed = false;
+        for (int i = 0; i < instances.Count; i++)
+        {
+            bool want = i < monitorCount;
+            bool disabled = IsDisabled(instances[i]);
+            if (want && disabled)
+            {
+                Run("pnputil.exe", $"/enable-device \"{instances[i]}\"", log, allowed: [0, 3010]);
+                changed = true;
+            }
+            else if (want && settingsChanged)
+            {
+                Run("pnputil.exe", $"/restart-device \"{instances[i]}\"", log, allowed: [0, 3010]);
+                changed = true;
+            }
+            else if (!want && !disabled)
+            {
+                Run("pnputil.exe", $"/disable-device \"{instances[i]}\"", log, allowed: [0, 3010]);
+            }
+        }
+        if (changed || settingsChanged)
+            log($"Anzeigetreiber: {monitorCount} virtuelle Monitore (je ein Gerät), Modi {string.Join(", ", modes.Distinct())}.");
+        return changed || settingsChanged;
     }
 
-    /// <summary>Lädt die Treiberkonfiguration neu (Pipe-Befehl), sonst Geräteneustart.</summary>
-    public static void Reload(Action<string> log)
+    /// <summary>Deaktiviert alle Treibergeräte (nach dem Beenden der Aufteilung – null Last im Normalbetrieb).</summary>
+    public static void DisableAll(Action<string> log)
     {
-        if (TrySendPipeCommand("RELOAD_DRIVER")) return;
-        log("Treiber-Pipe nicht erreichbar – starte Gerät neu.");
-        RestartDevice(log);
+        foreach (var instance in FindDeviceInstances())
+        {
+            if (IsDisabled(instance)) continue;
+            try { Run("pnputil.exe", $"/disable-device \"{instance}\"", log, allowed: [0, 3010]); }
+            catch (InvalidOperationException e) { log($"Gerät {instance} ließ sich nicht deaktivieren: {e.Message}"); }
+        }
+    }
+
+    /// <summary>Sorgt dafür, dass mindestens <paramref name="count"/> Treibergeräte existieren (sortiert).</summary>
+    private static IReadOnlyList<string> EnsureDeviceCount(int count, Action<string> log)
+    {
+        var instances = SortedInstances();
+        if (instances.Count < count)
+        {
+            log($"Lege {count - instances.Count} weitere Treibergeräte an …");
+            Run(Path.Combine(AppContext.BaseDirectory, "MonivoxDevice.exe"), $"create {count}", log, allowed: [0]);
+            var sw = Stopwatch.StartNew();
+            while ((instances = SortedInstances()).Count < count && sw.Elapsed < TimeSpan.FromSeconds(15))
+                Thread.Sleep(300);
+            if (instances.Count < count)
+                throw new InvalidOperationException($"Es konnten nur {instances.Count} von {count} Treibergeräten angelegt werden.");
+        }
+        return instances;
+    }
+
+    /// <summary>MONIVOX-Geräte zuerst in fester Reihenfolge (MttVDD, MttVDD2, …), danach fremde.</summary>
+    private static List<string> SortedInstances() =>
+        FindDeviceInstances()
+            .OrderBy(id => id.StartsWith(@"SWD\Monivox\", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+            .ThenBy(id => DeviceNumber(id))
+            .ThenBy(id => id, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+    private static int DeviceNumber(string instanceId)
+    {
+        var name = instanceId[(instanceId.LastIndexOf('\\') + 1)..];
+        var digits = new string(name.Reverse().TakeWhile(char.IsDigit).Reverse().ToArray());
+        return digits.Length == 0 ? 1 : int.Parse(digits, System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    private static bool IsDisabled(string instanceId)
+    {
+        using var key = Registry.LocalMachine.OpenSubKey($@"SYSTEM\CurrentControlSet\Enum\{instanceId}");
+        return key?.GetValue("ConfigFlags") is int flags && (flags & 0x1) != 0; // CONFIGFLAG_DISABLED
     }
 
     public static void RestartDevice(Action<string> log)
     {
         foreach (var instance in FindDeviceInstances())
-            Run("pnputil.exe", $"/restart-device \"{instance}\"", log, allowed: [0, 3010]);
+            if (!IsDisabled(instance))
+                Run("pnputil.exe", $"/restart-device \"{instance}\"", log, allowed: [0, 3010]);
     }
 
     public static bool TrySendPipeCommand(string command)

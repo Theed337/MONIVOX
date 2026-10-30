@@ -91,6 +91,15 @@ public partial class App : Application
         {
             await Controller.StartAsync(last);
         }
+        else if (VddControl.IsInstalled && !SplitSession.IsRunning)
+        {
+            // Keine Aufteilung aktiv: Treibergeräte abschalten, damit der Anzeigetreiber keine Last erzeugt
+            _ = Task.Run(() =>
+            {
+                try { VddControl.DisableAll(Controller.AddLog); }
+                catch (Exception ex) when (ex is InvalidOperationException or UnauthorizedAccessException or System.ComponentModel.Win32Exception) { Controller.AddLog($"Treiber abschalten: {ex.Message}"); }
+            });
+        }
 
         int updatedIdx = Array.IndexOf(e.Args, "--updated");
         if (updatedIdx >= 0 && updatedIdx + 1 < e.Args.Length)

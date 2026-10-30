@@ -128,6 +128,7 @@ public sealed class SplitSession(SplitOptions options, Action<string> log)
         {
             if (VddControl.Configure(virtualSpecs.Count, virtualSpecs.Select(s => s.Mode).ToList(), log))
                 log("Warte auf virtuelle Monitore …");
+
             try
             {
                 virtuals = WaitForVirtualDisplays(virtualSpecs.Count, TimeSpan.FromSeconds(10));
@@ -286,6 +287,9 @@ public sealed class SplitSession(SplitOptions options, Action<string> log)
             if (detach.Count > 0) log($"{detach.Count} virtuelle Monitore deaktiviert.");
         }
         try { File.Delete(RestorePath); } catch (IOException) { }
+        // Treibergeräte abschalten: ohne Aufteilung erzeugt der Anzeigetreiber so keinerlei Last
+        try { VddControl.DisableAll(log); }
+        catch (Exception e) when (e is InvalidOperationException or UnauthorizedAccessException or System.ComponentModel.Win32Exception) { log($"Treiber abschalten: {e.Message}"); }
         log("Ursprüngliche Anzeige wiederhergestellt.");
     }
 

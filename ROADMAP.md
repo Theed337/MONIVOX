@@ -34,7 +34,7 @@ Legende: ✅ erledigt · 🔨 Code fertig, CI grün, auf Hardware ungetestet · 
 - 🔨 Taskleiste pro virtuellem Bereich ausblendbar
 - 🔨 Erster Start: wartet, bis Windows neue Monitore meldet (vorher musste man 2× auf „Teilen“ drücken)
 - 🔨 Ruckeln: Maus-Brücke nur bei Bedarf, kein Dauer-Neusetzen des Arbeitsbereichs, Compositor auf der GPU des Monitors, Leistungsmessung im Protokoll
-- ⬜ Ruckeln auf allen Monitoren beim ersten Test – Ursache noch nicht sicher, Messwerte aus dem nächsten Test nötig
+- 🔨 **Ruckeln auf allen Monitoren: Ursache gefunden** – Fehler im Virtual Display Driver bei mehreren Monitoren an einem Gerät (upstream Issue #140). Lösung: ein Treibergerät pro virtuellem Monitor; ohne Aufteilung werden alle Geräte deaktiviert (keine Last)
 - ⬜ Mehrere Monitore gleichzeitig aufteilen
 - ⬜ `MinUpdateInterval` (Windows 11 24H2) für > 60 fps in virtuellen Bereichen
 - ⬜ Spieletests (DX11/DX12/Vulkan, Borderless/Exklusiv), Ergebnisliste
