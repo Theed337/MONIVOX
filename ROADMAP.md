@@ -39,7 +39,7 @@ Legende: ✅ erledigt · 🔨 Code fertig, CI grün, auf Hardware ungetestet · 
 ## Phase 6 – Fertige Anwendung ⬜
 - ⬜ Installer (WiX) inkl. .NET-Laufzeit-Prüfung, Startmenü, Deinstallation (Treiber + Autostart entfernen)
 - ⬜ Einrichtungsassistent beim ersten Start
-- ⬜ Codesignatur für MONIVOX selbst (SignPath Foundation, braucht öffentliches Repo)
+- ⬜ Codesignatur für MONIVOX selbst (SignPath Foundation – jetzt möglich, da das Repo öffentlich ist; Antrag nötig)
 
 ## Hinweise
-- Auto-Update braucht öffentlich abrufbare Releases. Solange das Repository privat ist, meldet die App „kein öffentliches Release gefunden“.
+- ✅ Repository ist öffentlich – Auto-Update über GitHub Releases funktioniert ohne Zugangsdaten.
