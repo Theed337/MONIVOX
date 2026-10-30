@@ -12,18 +12,19 @@ static int Usage()
     Console.WriteLine($"""
         MONIVOX {Updater.CurrentVersion}
 
-          monivox list                          Monitore anzeigen
-          monivox presets                       Layout-Vorlagen anzeigen
-          monivox preview <vorlage> [WxH]       Bereiche für eine Auflösung berechnen (ohne Änderungen)
-          monivox apply <vorlage> [optionen]    gewählten Monitor aufteilen (läuft bis Strg+C / Strg+Alt+Shift+Q)
-          monivox stop                          Aufteilung beenden, ursprüngliche Anordnung wiederherstellen
-          monivox check                         Anti-Cheat-Verträglichkeit prüfen
-          monivox update                        nach Updates suchen und installieren
+          monivox-cli list                          Monitore anzeigen
+          monivox-cli presets                       Layout-Vorlagen anzeigen
+          monivox-cli preview <vorlage> [WxH]       Bereiche für eine Auflösung berechnen (ohne Änderungen)
+          monivox-cli apply <vorlage> [optionen]    gewählten Monitor aufteilen (läuft bis Strg+C / Strg+Alt+Shift+Q)
+          monivox-cli stop                          Aufteilung beenden, ursprüngliche Anordnung wiederherstellen
+          monivox-cli check                         Anti-Cheat-Verträglichkeit prüfen
+          monivox-cli update                        nach Updates suchen und installieren
+          monivox-cli install-driver                Anzeigetreiber installieren (Administrator)
+          monivox-cli uninstall-driver              Anzeigetreiber entfernen (Administrator)
 
         Optionen für apply:
           --monitor DISPLAY2        welcher Monitor aufgeteilt wird (Pflicht bei mehreren Monitoren)
           --hz N                    Bildwiederholrate der virtuellen Monitore
-          --external                fremden virtuellen Treiber nutzen (z. B. Virtual Display Driver)
           --columns 0.6,0.8         eigene Spaltenaufteilung (Vorlage "custom")
           --no-update               Update-Prüfung überspringen
         """);
@@ -83,7 +84,7 @@ try
         {
             if (SplitSession.IsRunning)
             {
-                Console.Error.WriteLine("Bitte zuerst 'monivox stop' ausführen.");
+                Console.Error.WriteLine("Bitte zuerst 'monivox-cli stop' ausführen.");
                 return 1;
             }
             var updated = await TryUpdate(force: true);
@@ -94,10 +95,9 @@ try
         case "apply":
         {
             if (args.Length < 2) return Usage();
-            var backend = args.Contains("--external") ? DriverBackend.External : DriverBackend.Own;
-            if (backend == DriverBackend.Own && !DriverControl.IsAdministrator())
+            if (!VddControl.IsAdministrator())
             {
-                Console.Error.WriteLine("Bitte als Administrator ausführen (Treiberkonfiguration benötigt Adminrechte).");
+                Console.Error.WriteLine("Bitte als Administrator ausführen (Anzeigetreiber-Konfiguration benötigt Adminrechte).");
                 return 1;
             }
 
@@ -128,20 +128,32 @@ try
                 ResolveLayout(args[1], args),
                 PhysicalDevice: NormalizeMonitor(Option(args, "--monitor") ?? Option(args, "--physical")),
                 RefreshHz: int.TryParse(Option(args, "--hz"), out int hz) ? hz : 0,
-                Backend: backend,
                 CompositorPath: compositor);
 
             using var cts = new CancellationTokenSource();
             Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 
             int code = new SplitSession(options, Log).Run(cts.Token);
-            SplitSession.Stop(Log, backend);
+            SplitSession.Stop(Log);
             return code;
+        }
+
+        case "install-driver":
+        {
+            VddControl.Install(Log);
+            return 0;
+        }
+
+        case "uninstall-driver":
+        {
+            SplitSession.Stop(Log);
+            VddControl.Uninstall(Log);
+            return 0;
         }
 
         case "stop":
         {
-            SplitSession.Stop(Log, args.Contains("--external") ? DriverBackend.External : DriverBackend.Own);
+            SplitSession.Stop(Log);
             return 0;
         }
 
@@ -166,14 +178,14 @@ static async Task<Updater.ReleaseInfo?> TryUpdate(bool force)
         bool driverChanged = await updater.InstallAsync(release);
         if (driverChanged)
         {
-            if (DriverControl.IsAdministrator())
+            if (VddControl.IsAdministrator())
             {
-                Console.WriteLine("Treiber wurde aktualisiert – installiere neu …");
-                if (Updater.ReinstallDriver() != 0) Console.Error.WriteLine("Treiber-Neuinstallation fehlgeschlagen. Bitte scripts\\install-driver.ps1 als Admin ausführen.");
+                Console.WriteLine("Anzeigetreiber wurde aktualisiert – installiere neu …");
+                VddControl.Install(Log);
             }
             else
             {
-                Console.WriteLine("Treiber wurde aktualisiert – bitte scripts\\install-driver.ps1 als Administrator ausführen.");
+                Console.WriteLine("Anzeigetreiber wurde aktualisiert – bitte 'monivox-cli install-driver' als Administrator ausführen.");
             }
         }
         return release;
@@ -206,5 +218,5 @@ static Layout ResolveLayout(string name, string[] args)
     }
     return LayoutPresets.All.TryGetValue(name, out var layout)
         ? layout
-        : throw new ArgumentException($"Unbekannte Vorlage '{name}'. Siehe: monivox presets");
+        : throw new ArgumentException($"Unbekannte Vorlage '{name}'. Siehe: monivox-cli presets");
 }

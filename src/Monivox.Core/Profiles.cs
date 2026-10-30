@@ -32,7 +32,7 @@ public sealed record AppAssignment
 public sealed record Profile
 {
     public string Name { get; init; } = "";
-    /// <summary>Stabile Kennung des physischen Monitors (Monitor-Geräte-ID), leer = primärer Monitor.</summary>
+    /// <summary>Aufzuteilender Monitor (z. B. "DISPLAY2"), leer = einziger vorhandener Monitor.</summary>
     public string PhysicalMonitorId { get; init; } = "";
     public Layout Layout { get; init; } = LayoutPresets.HalfVertical;
     /// <summary>Bildwiederholrate der virtuellen Monitore, 0 = wie physischer Monitor.</summary>
@@ -67,6 +67,10 @@ public sealed record SettingsDocument
     public IReadOnlyList<Profile> Profiles { get; init; } = [];
     public string? LastProfile { get; init; }
     public bool StartWithWindows { get; init; }
+    /// <summary>Beim Start von MONIVOX das letzte Profil sofort aktivieren (virtuelle Monitore entstehen beim Start).</summary>
+    public bool SplitOnStartup { get; init; } = true;
+    /// <summary>Updates automatisch laden und installieren.</summary>
+    public bool AutoUpdate { get; init; } = true;
 }
 
 /// <summary>Lädt und speichert Profile als JSON (atomar über eine temporäre Datei).</summary>

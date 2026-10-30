@@ -5,19 +5,10 @@ using Monivox.Core;
 
 namespace Monivox.Windows;
 
-public enum DriverBackend
-{
-    /// <summary>Eigener Monivox-IDD (driver/), Modi werden automatisch gesetzt.</summary>
-    Own,
-    /// <summary>Fremder, bereits eingerichteter virtueller Treiber (z. B. signierter Virtual Display Driver).</summary>
-    External,
-}
-
 public sealed record SplitOptions(
     Layout Layout,
     string? PhysicalDevice = null,
     int RefreshHz = 0,
-    DriverBackend Backend = DriverBackend.Own,
     string CompositorPath = "MonivoxCompositor.exe");
 
 /// <summary>Gesicherte Anordnung vor dem Split – wird von <see cref="SplitSession.Stop"/> wiederhergestellt.</summary>
@@ -39,6 +30,12 @@ public sealed class SplitSession(SplitOptions options, Action<string> log)
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Monivox");
 
     public static string CompositorConfigPath => Path.Combine(RuntimeDirectory, "compositor.cfg");
+
+    /// <summary>
+    /// Wird ausgelöst, sobald die virtuellen Monitore angeordnet sind (auch nach jedem Neuaufbau).
+    /// Liefert pro Layout-Bereich die Desktop-Koordinaten des zugehörigen virtuellen Monitors.
+    /// </summary>
+    public event Action<IReadOnlyList<PixelRect>>? Ready;
     public static string RestorePath => Path.Combine(RuntimeDirectory, "restore.json");
 
     /// <summary>Wählt den aufzuteilenden Monitor. Bei mehreren echten Monitoren muss er angegeben werden.</summary>
@@ -113,13 +110,23 @@ public sealed class SplitSession(SplitOptions options, Action<string> log)
         log($"Aufgeteilt wird: {restore.PhysicalDevice} ({physicalMode}) – andere Monitore bleiben unverändert.");
         foreach (var s in specs) log($"  Bereich {s.Index + 1}: {s.Dest} -> virtueller Monitor {s.Mode}");
 
-        if (options.Backend == DriverBackend.Own)
-        {
-            if (DriverControl.Configure(specs.Select(s => s.Mode).ToList()))
-                log("Treiber neu konfiguriert, warte auf virtuelle Monitore …");
-        }
+        if (!VddControl.IsInstalled)
+            throw new InvalidOperationException("Der Anzeigetreiber ist nicht installiert (Status-Seite → „Treiber installieren“).");
 
-        var virtuals = WaitForVirtualDisplays(specs.Count, TimeSpan.FromSeconds(20));
+        var modes = specs.Select(s => s.Mode).ToList();
+        if (VddControl.Configure(specs.Count, modes, log)) log("Warte auf virtuelle Monitore …");
+
+        IReadOnlyList<DisplayInfo> virtuals;
+        try
+        {
+            virtuals = WaitForVirtualDisplays(specs.Count, TimeSpan.FromSeconds(10));
+        }
+        catch (InvalidOperationException)
+        {
+            // Manche Treiberversionen übernehmen die Monitoranzahl erst nach einem Geräteneustart.
+            VddControl.RestartDevice(log);
+            virtuals = WaitForVirtualDisplays(specs.Count, TimeSpan.FromSeconds(20));
+        }
 
         // Andere Monitore an ihrer ursprünglichen Position (aus der Sicherung, nicht der aktuellen –
         // nach einem Neustart könnte sich der Ursprung verschoben haben).
@@ -140,16 +147,14 @@ public sealed class SplitSession(SplitOptions options, Action<string> log)
         var placements = new List<DisplayArranger.Placement>();
         foreach (var v in plan.Virtuals)
         {
-            // Beim Fremdtreiber Modus nur setzen, wenn er dort verfügbar ist – Windows lehnt sonst ab.
-            DisplayMode? wantedMode = options.Backend == DriverBackend.Own ? v.Mode : null;
-            placements.Add(new(virtuals[v.Index].DeviceName, v.X, v.Y, wantedMode, v.Primary));
+            placements.Add(new(virtuals[v.Index].DeviceName, v.X, v.Y, v.Mode, v.Primary));
         }
         foreach (var o in plan.Others) placements.Add(new(o.DeviceName, o.Bounds.X, o.Bounds.Y, null, o.IsPrimary));
         placements.Add(new(restore.PhysicalDevice, plan.ParkedPhysical.X, plan.ParkedPhysical.Y, null, false));
         DisplayArranger.Apply(placements);
         log("Monitore angeordnet.");
 
-        // Nach dem Umschalten tatsächliche Modi prüfen (Fremdtreiber!)
+        // Nach dem Umschalten tatsächliche Modi prüfen
         var after = Displays.Enumerate();
         foreach (var spec in specs)
         {
@@ -161,6 +166,8 @@ public sealed class SplitSession(SplitOptions options, Action<string> log)
         Directory.CreateDirectory(RuntimeDirectory);
         File.WriteAllText(CompositorConfigPath, CompositorConfig.Build(restore.PhysicalDevice,
             specs.Select(s => (virtuals[s.Index].DeviceName, s.Dest))));
+
+        Ready?.Invoke(specs.Select(s => after.First(d => d.DeviceName == virtuals[s.Index].DeviceName).Bounds).ToList());
     }
 
     private IReadOnlyList<DisplayInfo> WaitForVirtualDisplays(int count, TimeSpan timeout)
@@ -173,10 +180,7 @@ public sealed class SplitSession(SplitOptions options, Action<string> log)
             if (sw.Elapsed > timeout)
             {
                 throw new InvalidOperationException(
-                    $"Es wurden nur {virtuals.Count} von {count} virtuellen Monitoren gefunden. " +
-                    (options.Backend == DriverBackend.Own
-                        ? "Ist der Monivox-Treiber installiert (scripts\\install-driver.ps1)?"
-                        : "Bitte im externen Treiber genügend virtuelle Monitore aktivieren."));
+                    $"Es wurden nur {virtuals.Count} von {count} virtuellen Monitoren gefunden.");
             }
             Thread.Sleep(500);
         }
@@ -200,7 +204,7 @@ public sealed class SplitSession(SplitOptions options, Action<string> log)
     public static bool IsRunning => Process.GetProcessesByName("MonivoxCompositor").Length > 0;
 
     /// <summary>Beendet laufende Compositoren und stellt die ursprüngliche Anordnung wieder her.</summary>
-    public static void Stop(Action<string> log, DriverBackend backend = DriverBackend.Own)
+    public static void Stop(Action<string> log)
     {
         foreach (var p in Process.GetProcessesByName("MonivoxCompositor"))
         {
@@ -211,9 +215,8 @@ public sealed class SplitSession(SplitOptions options, Action<string> log)
 
         var all = Displays.Enumerate();
         var virtuals = all.Where(d => Displays.IsVirtual(d) && d.IsAttached).ToList();
-        // Virtuelle Monitore im selben Schritt vom Desktop lösen (nur beim eigenen Treiber –
-        // ein Fremdtreiber verwaltet seine Monitore selbst).
-        List<string> detach = backend == DriverBackend.Own ? virtuals.Select(v => v.DeviceName).ToList() : new List<string>();
+        // Virtuelle Monitore im selben Schritt vom Desktop lösen
+        List<string> detach = virtuals.Select(v => v.DeviceName).ToList();
 
         var restore = LoadRestore();
         var placements = new List<DisplayArranger.Placement>();

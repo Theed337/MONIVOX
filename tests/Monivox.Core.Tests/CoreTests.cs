@@ -88,7 +88,7 @@ public class LayoutValidationTests
     [Fact]
     public void TooSmallForResolution_IsDetected()
     {
-        var layout = LayoutPresets.Columns("eng", 0.1);
+        var layout = LayoutPresets.Columns("eng", 0.05);
         Assert.Contains(layout.Validate(1920, 1080), e => e.Contains("zu klein"));
     }
 
@@ -158,19 +158,46 @@ public class DesktopArrangementTests
 public class ConfigFormatTests
 {
     [Fact]
-    public void DriverConfig_RoundTrips()
+    public void VddSettings_SetsCountAndAddsMissingModes_KeepsOthers()
     {
-        var modes = new[] { new DisplayMode(1920, 2160, 144), new DisplayMode(1280, 720, 60) };
-        var text = DriverConfig.Format(modes);
-        Assert.Equal("1920x2160@144;1280x720@60", text);
-        Assert.Equal(modes, DriverConfig.Parse(text));
+        var doc = System.Xml.Linq.XDocument.Parse("""
+            <vdd_settings>
+              <monitors><count>1</count></monitors>
+              <global><g_refresh_rate>60</g_refresh_rate></global>
+              <resolutions><resolution><width>1920</width><height>1080</height><refresh_rate>60</refresh_rate></resolution></resolutions>
+              <options><HardwareCursor>true</HardwareCursor></options>
+            </vdd_settings>
+            """);
+        bool changed = VddSettings.Apply(doc, 2, [new DisplayMode(1920, 2160, 144), new DisplayMode(1920, 1080, 60)]);
+
+        Assert.True(changed);
+        Assert.Equal(2, VddSettings.GetMonitorCount(doc));
+        var res = doc.Root!.Element("resolutions")!.Elements("resolution").ToList();
+        Assert.Equal(2, res.Count);
+        Assert.Contains(res, r => r.Element("width")!.Value == "1920" && r.Element("height")!.Value == "2160");
+        Assert.Contains(doc.Root!.Element("global")!.Elements("g_refresh_rate"), e => e.Value == "144");
+        Assert.Equal("true", doc.Root!.Element("options")!.Element("HardwareCursor")!.Value);
+
+        Assert.False(VddSettings.Apply(doc, 2, [new DisplayMode(1920, 2160, 144)]));
     }
 
     [Fact]
-    public void DriverConfig_SkipsInvalidEntries_LikeDriver()
+    public void VddSettings_RejectsTooLargeModes()
     {
-        var parsed = DriverConfig.Parse("100x100@60; 1920x1080 ;abc;800x600@1000");
-        Assert.Equal(new[] { new DisplayMode(1920, 1080, 60), new DisplayMode(800, 600, 60) }, parsed);
+        var doc = VddSettings.CreateDefault();
+        Assert.Throws<ArgumentOutOfRangeException>(() => VddSettings.Apply(doc, 1, [new DisplayMode(8000, 1000, 60)]));
+    }
+
+    [Fact]
+    public void SmallRegion_GetsUpscaledModeWithSameAspect()
+    {
+        // 800x200 Telemetrie-Streifen -> virtueller Monitor mind. 640x480, Seitenverhältnis 4:1
+        var mode = LayoutResolver.ModeFor(new PixelRect(0, 0, 800, 200), 60);
+        Assert.True(mode.Width >= 640 && mode.Height >= 480);
+        Assert.Equal(4.0, (double)mode.Width / mode.Height, 2);
+
+        var exact = LayoutResolver.ModeFor(new PixelRect(0, 0, 1920, 2160), 144);
+        Assert.Equal(new DisplayMode(1920, 2160, 144), exact);
     }
 
     [Fact]

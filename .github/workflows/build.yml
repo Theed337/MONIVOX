@@ -7,7 +7,10 @@ on:
 
 env:
   # Jeder Build bekommt eine fortlaufende Version; Releases entstehen nur auf main.
-  MONIVOX_VERSION: 0.2.${{ github.run_number }}
+  MONIVOX_VERSION: 0.3.${{ github.run_number }}
+  # Mitgelieferter, offiziell signierter Virtual Display Driver (MIT) – Version und Prüfsumme festgenagelt
+  VDD_URL: https://github.com/VirtualDrivers/Virtual-Display-Driver/releases/download/25.7.23/VirtualDisplayDriver-x86.Driver.Only.zip
+  VDD_SHA256: e24210692b442b39af763536330ce78b423f19342b7a7792c26de3944e418b3a
 
 jobs:
   core-tests:
@@ -20,63 +23,8 @@ jobs:
           dotnet-version: 8.0.x
       - run: dotnet test tests/Monivox.Core.Tests -c Release --logger "console;verbosity=normal"
 
-  driver:
-    name: IDD-Treiber (WDK)
-    runs-on: windows-2022
-    steps:
-      - uses: actions/checkout@v4
-      - uses: microsoft/setup-msbuild@v2
-        with:
-          msbuild-architecture: x64
-      - name: Treiber bauen (unsigniert)
-        shell: pwsh
-        run: |
-          # 64-Bit-MSBuild nötig: der WDK liefert InfVerif nur als x64-DLL.
-          msbuild driver\MonivoxDriver.sln /m /p:Configuration=Release /p:Platform=x64 /p:SignMode=Off /nologo /v:minimal | Tee-Object -FilePath msbuild.log
-          if ($LASTEXITCODE -ne 0) {
-            Select-String -Path msbuild.log -Pattern ": (fatal )?error |error MSB|error [A-Z]+\d+" | Select-Object -First 8 | ForEach-Object { Write-Output "::error::$($_.Line.Trim())" }
-            exit 1
-          }
-      - name: Treiber signieren (Einweg-Zertifikat, keine Testsignatur nötig)
-        shell: pwsh
-        run: |
-          # UMDF-Treiber (wie IDDs) laufen im User-Mode. Windows verlangt dafür eine gültige
-          # Authenticode-Signatur, deren Zertifikat beim Nutzer in "Vertrauenswürdige Stammzertifizierungsstellen"
-          # und "Vertrauenswürdige Herausgeber" liegt – KEINEN Testsignatur-Modus.
-          # Das Zertifikat wird pro Build neu erzeugt; der private Schlüssel verlässt den Build-Runner nie
-          # und wird mit ihm vernichtet. Es kann ausschließlich Code signieren (EKU Code Signing).
-          $inf = Get-ChildItem build\driver -Recurse -Filter MonivoxIdd.inf | Where-Object { Test-Path (Join-Path $_.DirectoryName 'MonivoxIdd.dll') } | Select-Object -First 1
-          if (-not $inf) { Get-ChildItem build\driver -Recurse | Select-Object FullName; throw "Treiberpaket nicht gefunden" }
-          $pkg = $inf.DirectoryName
-          $kits = "${env:ProgramFiles(x86)}\Windows Kits\10\bin"
-          $signtool = Get-ChildItem $kits -Recurse -Filter signtool.exe | Where-Object { $_.FullName -match '\\x64\\' } | Sort-Object FullName -Descending | Select-Object -First 1
-          $inf2cat = Get-ChildItem $kits -Recurse -Filter Inf2Cat.exe | Sort-Object FullName -Descending | Select-Object -First 1
-          if (-not $signtool -or -not $inf2cat) { throw "signtool/Inf2Cat nicht gefunden" }
-
-          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=MONIVOX Driver Signing" `
-                    -CertStoreLocation Cert:\CurrentUser\My -KeyAlgorithm RSA -KeyLength 3072 -HashAlgorithm SHA256 `
-                    -NotAfter (Get-Date).AddYears(5)
-          $ts = "http://timestamp.digicert.com"
-          & $signtool.FullName sign /fd sha256 /sha1 $cert.Thumbprint /tr $ts /td sha256 (Join-Path $pkg MonivoxIdd.dll)
-          if ($LASTEXITCODE -ne 0) { throw "DLL-Signatur fehlgeschlagen" }
-          Remove-Item (Join-Path $pkg *.cat) -ErrorAction SilentlyContinue
-          & $inf2cat.FullName /driver:$pkg /os:10_X64 /uselocaltime
-          if ($LASTEXITCODE -ne 0) { throw "Inf2Cat fehlgeschlagen" }
-          & $signtool.FullName sign /fd sha256 /sha1 $cert.Thumbprint /tr $ts /td sha256 (Join-Path $pkg MonivoxIdd.cat)
-          if ($LASTEXITCODE -ne 0) { throw "Katalog-Signatur fehlgeschlagen" }
-
-          New-Item -ItemType Directory -Force driver-package | Out-Null
-          Copy-Item (Join-Path $pkg '*') driver-package -Recurse
-          Export-Certificate -Cert $cert -FilePath driver-package\MonivoxDriver.cer | Out-Null
-          Remove-Item -Path "Cert:\CurrentUser\My\$($cert.Thumbprint)" -DeleteKey
-          Get-ChildItem driver-package
-      - uses: actions/upload-artifact@v4
-        with:
-          name: driver-package
-          path: driver-package
-
-  native-and-cli:
-    name: Compositor + CLI
+  windows:
+    name: App, Compositor, CLI
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
@@ -89,19 +37,37 @@ jobs:
           cmake -S native -B build\native -A x64
           cmake --build build\native --config Release -- /nologo /v:minimal | Tee-Object -FilePath cmake.log
           if ($LASTEXITCODE -ne 0) {
-            Select-String -Path cmake.log -Pattern ": (fatal )?error |error MSB|error [A-Z]+\d+" | Select-Object -First 30 | ForEach-Object { Write-Output "::error::$($_.Line.Trim())" }
+            Select-String -Path cmake.log -Pattern ": (fatal )?error |error MSB|error [A-Z]+\d+" | Select-Object -First 8 | ForEach-Object { Write-Output "::error::$($_.Line.Trim())" }
             exit 1
           }
-      - name: CLI veröffentlichen
-        run: dotnet publish src\Monivox.Cli -c Release -r win-x64 --self-contained false -o dist\Monivox -p:Version=${{ env.MONIVOX_VERSION }}
+      - name: App + CLI veröffentlichen
+        shell: pwsh
+        run: |
+          foreach ($proj in "src\Monivox.App", "src\Monivox.Cli") {
+            dotnet publish $proj -c Release -r win-x64 --self-contained false -o dist\Monivox -p:Version=$env:MONIVOX_VERSION -nologo -clp:NoSummary | Tee-Object -FilePath publish.log
+            if ($LASTEXITCODE -ne 0) {
+              Select-String -Path publish.log -Pattern "error [A-Z]+\d+" | Select-Object -First 8 | ForEach-Object { Write-Output "::error::$($_.Line.Trim())" }
+              exit 1
+            }
+          }
+      - name: Anzeigetreiber einbinden (geprüfte Prüfsumme)
+        shell: pwsh
+        run: |
+          Invoke-WebRequest $env:VDD_URL -OutFile vdd.zip
+          $hash = (Get-FileHash vdd.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -ne $env:VDD_SHA256) { Write-Output "::error::Prüfsumme des Treiberpakets stimmt nicht ($hash)"; exit 1 }
+          Expand-Archive vdd.zip -DestinationPath vdd-x
+          New-Item -ItemType Directory -Force dist\Monivox\vdd | Out-Null
+          Copy-Item vdd-x\VirtualDisplayDriver\* dist\Monivox\vdd\
+          $sig = Get-AuthenticodeSignature dist\Monivox\vdd\mttvdd.cat
+          Write-Output "Treibersignatur: $($sig.Status) – $($sig.SignerCertificate.Subject)"
       - name: Zusammenstellen
         shell: pwsh
         run: |
           Copy-Item build\native\Release\MonivoxCompositor.exe dist\Monivox\
           Copy-Item build\native\Release\MonivoxDevice.exe dist\Monivox\
-          New-Item -ItemType Directory -Force dist\Monivox\scripts | Out-Null
-          Copy-Item scripts\*.ps1 dist\Monivox\scripts\
-          Copy-Item README.md, docs\MACHBARKEIT.md dist\Monivox\
+          Copy-Item README.md, LICENSE, THIRD-PARTY-NOTICES.md dist\Monivox\
+          Get-ChildItem dist\Monivox | Select-Object Name, Length
       - uses: actions/upload-artifact@v4
         with:
           name: app
@@ -109,7 +75,7 @@ jobs:
 
   package:
     name: Gesamtpaket + Release
-    needs: [core-tests, driver, native-and-cli]
+    needs: [core-tests, windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -118,10 +84,6 @@ jobs:
         with:
           name: app
           path: Monivox
-      - uses: actions/download-artifact@v4
-        with:
-          name: driver-package
-          path: Monivox/driver-package
       - name: ZIP + Prüfsumme
         run: |
           cd Monivox && zip -qr ../Monivox-win-x64.zip . && cd ..

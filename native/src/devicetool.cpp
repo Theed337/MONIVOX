@@ -1,10 +1,10 @@
-// MonivoxDevice – legt das Software-Gerät für den Monivox-IDD an oder entfernt es.
+// MonivoxDevice – legt das Software-Gerät für den mitgelieferten Virtual Display Driver an oder entfernt es.
 //
-//   MonivoxDevice.exe create   -> erzeugt SWD\Monivox\MonivoxIdd (bleibt dauerhaft bestehen)
+//   MonivoxDevice.exe create   -> erzeugt SWD\Monivox\MttVDD mit Hardware-ID Root\MttVDD (bleibt bestehen)
 //   MonivoxDevice.exe remove   -> entfernt das Gerät wieder
 //
-// Der Treiber selbst muss vorher mit "pnputil /add-driver MonivoxIdd.inf /install"
-// im Driver Store liegen. Benötigt Administratorrechte.
+// Der Treiber selbst muss vorher mit "pnputil /add-driver MttVDD.inf /install" im Driver Store liegen.
+// Benötigt Administratorrechte. (Ersetzt das sonst übliche Drittwerkzeug "nefcon".)
 
 #include <windows.h>
 #include <swdevice.h>
@@ -32,10 +32,10 @@ namespace
     {
         SW_DEVICE_CREATE_INFO info{};
         info.cbSize = sizeof(info);
-        info.pszInstanceId = L"MonivoxIdd";
-        info.pszzHardwareIds = L"MonivoxIdd\0\0";
-        info.pszzCompatibleIds = L"MonivoxIdd\0\0";
-        info.pszDeviceDescription = L"Monivox Virtual Display Adapter";
+        info.pszInstanceId = L"MttVDD";
+        info.pszzHardwareIds = L"Root\\MttVDD\0\0";
+        info.pszzCompatibleIds = L"Root\\MttVDD\0\0";
+        info.pszDeviceDescription = L"Virtual Display Driver (MONIVOX)";
         info.CapabilityFlags = SWDeviceCapabilitiesRemovable | SWDeviceCapabilitiesSilentInstall | SWDeviceCapabilitiesDriverRequired;
 
         result.Done = CreateEventW(nullptr, TRUE, FALSE, nullptr);

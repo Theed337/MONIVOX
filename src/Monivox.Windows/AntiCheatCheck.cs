@@ -59,7 +59,7 @@ public static class AntiCheatCheck
                 $"Anti-Cheat aktiv: {string.Join(", ", running)}. MONIVOX greift nicht in Spiele ein; virtuelle Monitore " +
                 "und Bildschirmaufnahme werden genauso von OBS, Parsec oder Sunshine genutzt und sind uns als Bann-Grund " +
                 "nicht bekannt. Eine Garantie kann es trotzdem nicht geben – wenn ein Spiel meckert oder nicht startet, " +
-                "MONIVOX vorher mit 'monivox stop' beenden."));
+                "die Aufteilung vorher beenden (Rechtsklick aufs Tray-Symbol → Teilen beenden)."));
         }
         return findings;
     }

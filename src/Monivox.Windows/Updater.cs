@@ -145,8 +145,8 @@ public sealed class Updater(Action<string> log)
 
     private static bool DriverPackageChanged(string staging, string installRoot)
     {
-        string newCat = Path.Combine(staging, "driver-package", "MonivoxIdd.cat");
-        string oldCat = Path.Combine(installRoot, "driver-package", "MonivoxIdd.cat");
+        string newCat = Path.Combine(staging, "vdd", "mttvdd.cat");
+        string oldCat = Path.Combine(installRoot, "vdd", "mttvdd.cat");
         if (!File.Exists(newCat)) return false;
         if (!File.Exists(oldCat)) return true;
         return !File.ReadAllBytes(newCat).AsSpan().SequenceEqual(File.ReadAllBytes(oldCat));
@@ -159,15 +159,5 @@ public sealed class Updater(Action<string> log)
         {
             try { File.Delete(file); } catch (IOException) { } catch (UnauthorizedAccessException) { }
         }
-    }
-
-    /// <summary>Installiert den Treiber aus dem (aktualisierten) Paket neu. Benötigt Adminrechte.</summary>
-    public static int ReinstallDriver()
-    {
-        string script = Path.Combine(InstallDirectory, "scripts", "install-driver.ps1");
-        var psi = new ProcessStartInfo("powershell.exe", $"-NoProfile -ExecutionPolicy Bypass -File \"{script}\"") { UseShellExecute = false };
-        using var p = Process.Start(psi)!;
-        p.WaitForExit();
-        return p.ExitCode;
     }
 }

@@ -9,29 +9,22 @@ namespace Monivox.Windows;
 /// <summary>Ein Windows-Display-Ausgang mit (falls verbunden) angeschlossenem Monitor.</summary>
 public sealed record DisplayInfo(
     string DeviceName,          // \\.\DISPLAY3
-    string AdapterName,         // z. B. "NVIDIA GeForce RTX 4070" oder "Monivox Virtual Display Adapter"
-    string MonitorId,           // z. B. MONITOR\MVX5D00\{...}
+    string AdapterName,         // z. B. "NVIDIA GeForce RTX 4070" oder "Virtual Display Driver"
+    string AdapterId,           // PnP-Hardware-ID des Adapters, z. B. Root\MttVDD
+    string MonitorId,
     bool IsAttached,
     bool IsPrimary,
     PixelRect Bounds,
     DisplayMode Mode)
 {
-    /// <summary>Index des virtuellen Monivox-Monitors (aus der EDID-Produktkennung), sonst null.</summary>
-    public int? MonivoxIndex
-    {
-        get
-        {
-            var m = Regex.Match(MonitorId, @"MVX5D0([0-7])", RegexOptions.IgnoreCase);
-            return m.Success ? int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture) : null;
-        }
-    }
+    public string ShortName => DeviceName.Replace(@"\\.\", "");
 }
 
 [SupportedOSPlatform("windows")]
 public static class Displays
 {
-    /// <summary>Adapterbezeichnungen, die als virtuell gelten (eigener Treiber + Backend B).</summary>
-    public static readonly string[] DefaultVirtualAdapterMarkers = ["Monivox", "Virtual Display"];
+    /// <summary>Merkmale des mitgelieferten Virtual Display Driver (Hardware-ID bzw. Adaptername).</summary>
+    public static readonly string[] DefaultVirtualAdapterMarkers = ["MttVDD", "Virtual Display"];
 
     public static IReadOnlyList<DisplayInfo> Enumerate()
     {
@@ -55,27 +48,23 @@ public static class Displays
                 mode = new DisplayMode((int)dm.dmPelsWidth, (int)dm.dmPelsHeight, (int)dm.dmDisplayFrequency);
             }
 
-            result.Add(new DisplayInfo(adapter.DeviceName, adapter.DeviceString, monitorId, attached,
+            result.Add(new DisplayInfo(adapter.DeviceName, adapter.DeviceString, adapter.DeviceID ?? "", monitorId, attached,
                 (adapter.StateFlags & DISPLAY_DEVICE_PRIMARY_DEVICE) != 0, bounds, mode));
         }
         return result;
     }
 
     public static bool IsVirtual(DisplayInfo d, IEnumerable<string>? markers = null) =>
-        d.MonivoxIndex is not null ||
-        (markers ?? DefaultVirtualAdapterMarkers).Any(m => d.AdapterName.Contains(m, StringComparison.OrdinalIgnoreCase));
+        (markers ?? DefaultVirtualAdapterMarkers).Any(m =>
+            d.AdapterName.Contains(m, StringComparison.OrdinalIgnoreCase) ||
+            d.AdapterId.Contains(m, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
-    /// Ordnet virtuelle Monitore den Layout-Indizes zu. Eigener Treiber: über die EDID-Kennung.
-    /// Fremdtreiber: in Reihenfolge der Gerätenamen.
+    /// Virtuelle Monitore in stabiler Reihenfolge. Welcher virtuelle Monitor welchen Bereich bekommt, ist egal:
+    /// MONIVOX setzt Auflösung und Position jedes virtuellen Monitors selbst.
     /// </summary>
-    public static IReadOnlyList<DisplayInfo> VirtualDisplaysInOrder(IReadOnlyList<DisplayInfo> all, IEnumerable<string>? markers = null)
-    {
-        var virtuals = all.Where(d => IsVirtual(d, markers)).ToList();
-        if (virtuals.All(d => d.MonivoxIndex is not null))
-            return virtuals.OrderBy(d => d.MonivoxIndex).ToList();
-        return virtuals.OrderBy(d => DeviceNumber(d.DeviceName)).ToList();
-    }
+    public static IReadOnlyList<DisplayInfo> VirtualDisplaysInOrder(IReadOnlyList<DisplayInfo> all, IEnumerable<string>? markers = null) =>
+        all.Where(d => IsVirtual(d, markers)).OrderBy(d => DeviceNumber(d.DeviceName)).ToList();
 
     private static int DeviceNumber(string deviceName)
     {

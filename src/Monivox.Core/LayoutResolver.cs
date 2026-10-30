@@ -28,9 +28,26 @@ public static class LayoutResolver
             int right = Edge(r.Right, physical.Width);
             int bottom = Edge(r.Bottom, physical.Height);
             var dest = new PixelRect(left, top, right - left, bottom - top);
-            result.Add(new VirtualMonitorSpec(i, dest, new DisplayMode(dest.Width, dest.Height, physical.RefreshHz)));
+            result.Add(new VirtualMonitorSpec(i, dest, ModeFor(dest, physical.RefreshHz)));
         }
         return result;
+    }
+
+    /// <summary>
+    /// Der virtuelle Monitor bekommt normalerweise exakt die Bereichsgröße (1:1, gestochen scharf).
+    /// Ist ein Bereich kleiner als das, was der Anzeigetreiber kann (640x480), wird der virtuelle Monitor
+    /// im selben Seitenverhältnis vergrößert und vom Compositor verkleinert dargestellt – so sind auch
+    /// schmale Streifen möglich (z. B. Telemetrie-Leiste bei Rennspielen).
+    /// </summary>
+    public static DisplayMode ModeFor(PixelRect dest, int refreshHz)
+    {
+        if (dest.Width <= 0 || dest.Height <= 0) return new DisplayMode(0, 0, refreshHz);
+        double k = Math.Max(1.0, Math.Max((double)VddSettings.MinWidth / dest.Width, (double)VddSettings.MinHeight / dest.Height));
+        int w = (int)Math.Ceiling(dest.Width * k);
+        int h = (int)Math.Ceiling(dest.Height * k);
+        // Gerade Werte vermeiden Probleme mancher Grafiktreiber mit ungeraden Modi.
+        if (k > 1) { w += w % 2; h += h % 2; }
+        return new DisplayMode(w, h, refreshHz);
     }
 
     private static int Edge(double normalized, int size) =>

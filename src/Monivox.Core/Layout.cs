@@ -9,15 +9,22 @@ namespace Monivox.Core;
 /// </summary>
 public sealed record Layout
 {
-    /// <summary>Maximale Anzahl Bereiche (entspricht der Treibergrenze).</summary>
+    /// <summary>Maximale Anzahl Bereiche pro Monitor.</summary>
     public const int MaxRegions = 8;
 
-    /// <summary>Kleinste erlaubte Bereichsgröße in Pixeln (entspricht den Treibergrenzen).</summary>
-    public const int MinRegionWidth = 320;
-    public const int MinRegionHeight = 240;
+    /// <summary>Kleinste sinnvolle Bereichsgröße in Pixeln. Kleinere Bereiche als 640x480 werden über
+    /// einen größeren virtuellen Monitor im selben Seitenverhältnis dargestellt.</summary>
+    public const int MinRegionWidth = 160;
+    public const int MinRegionHeight = 90;
 
     public string Name { get; init; } = "";
     public IReadOnlyList<NormRect> Regions { get; init; } = [];
+
+    /// <summary>Optionale Namen der Bereiche (z. B. "Spiel", "Discord", "Telemetrie").</summary>
+    public IReadOnlyList<string> Names { get; init; } = [];
+
+    public string RegionName(int index) =>
+        index < Names.Count && !string.IsNullOrWhiteSpace(Names[index]) ? Names[index] : $"Bereich {index + 1}";
 
     [JsonConstructor]
     public Layout() { }
@@ -65,6 +72,8 @@ public sealed record Layout
         {
             if (spec.Dest.Width < MinRegionWidth || spec.Dest.Height < MinRegionHeight)
                 errors.Add($"Bereich {spec.Index + 1} ist mit {spec.Dest.Width}x{spec.Dest.Height} zu klein.");
+            else if (spec.Mode.Width > VddSettings.MaxWidth || spec.Mode.Height > VddSettings.MaxHeight)
+                errors.Add($"Bereich {spec.Index + 1} ist mit {spec.Dest.Width}x{spec.Dest.Height} zu extrem im Seitenverhältnis.");
         }
         return errors;
     }

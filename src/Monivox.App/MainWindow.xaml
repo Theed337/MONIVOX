@@ -1,0 +1,192 @@
+<Window x:Class="Monivox.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:Monivox.App"
+        Title="MONIVOX" Width="1180" Height="800" MinWidth="900" MinHeight="620"
+        Background="{DynamicResource Bg}" WindowStartupLocation="CenterScreen">
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="220"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <!-- Navigation -->
+        <DockPanel Margin="16,20,8,16">
+            <StackPanel DockPanel.Dock="Top" Margin="8,0,0,24">
+                <TextBlock Text="MONIVOX" FontSize="22" FontWeight="Bold" Foreground="{DynamicResource Accent}"/>
+                <TextBlock x:Name="VersionText" Style="{StaticResource Sub}" Text="Version"/>
+            </StackPanel>
+            <Border DockPanel.Dock="Bottom" Style="{StaticResource Card}" Padding="12" Margin="0">
+                <StackPanel>
+                    <StackPanel Orientation="Horizontal">
+                        <Ellipse x:Name="StatusDot" Width="10" Height="10" Fill="{DynamicResource TextDim}" Margin="0,0,8,0"/>
+                        <TextBlock x:Name="StatusText" Text="Nicht aktiv" FontWeight="SemiBold"/>
+                    </StackPanel>
+                    <Button x:Name="ToggleButton" Style="{StaticResource Primary}" Content="Teilen starten" Margin="0,10,0,0"
+                            HorizontalAlignment="Stretch" Click="Toggle_Click"/>
+                </StackPanel>
+            </Border>
+            <StackPanel>
+                <RadioButton Style="{StaticResource Nav}" GroupName="nav" IsChecked="True" Tag="PageLayout" Checked="Nav_Checked" Content="Bildschirme"/>
+                <RadioButton Style="{StaticResource Nav}" GroupName="nav" Tag="PageApps" Checked="Nav_Checked" Content="Programme"/>
+                <RadioButton Style="{StaticResource Nav}" GroupName="nav" Tag="PageSettings" Checked="Nav_Checked" Content="Einstellungen"/>
+                <RadioButton Style="{StaticResource Nav}" GroupName="nav" Tag="PageStatus" Checked="Nav_Checked" Content="Status &amp; Treiber"/>
+            </StackPanel>
+        </DockPanel>
+
+        <!-- Seiten -->
+        <Grid Grid.Column="1" Margin="8,20,24,16">
+
+            <!-- ============ Bildschirme ============ -->
+            <DockPanel x:Name="PageLayout">
+                <StackPanel DockPanel.Dock="Top">
+                    <TextBlock Style="{StaticResource H1}" Text="Bildschirme"/>
+                    <TextBlock Style="{StaticResource Sub}" Text="Teile einen Monitor frei in Bereiche auf. Jeder Bereich wird für Windows, Programme und Spiele ein eigener Bildschirm. Alle anderen Monitore bleiben unverändert."/>
+                    <Border Style="{StaticResource Card}" Margin="0,12,0,12">
+                        <WrapPanel>
+                            <StackPanel Margin="0,0,16,0">
+                                <TextBlock Style="{StaticResource Label}" Margin="0,0,0,4" Text="Profil"/>
+                                <StackPanel Orientation="Horizontal">
+                                    <ComboBox x:Name="ProfileBox" Width="180" SelectionChanged="ProfileBox_SelectionChanged" Margin="0,0,8,0"/>
+                                    <Button Content="Neu" Click="NewProfile_Click"/>
+                                    <Button Content="Umbenennen" Click="RenameProfile_Click"/>
+                                    <Button Content="Löschen" Click="DeleteProfile_Click"/>
+                                    <Button Content="Export" Click="Export_Click"/>
+                                    <Button Content="Import" Click="Import_Click"/>
+                                </StackPanel>
+                            </StackPanel>
+                            <StackPanel Margin="0,0,16,0">
+                                <TextBlock Style="{StaticResource Label}" Margin="0,0,0,4" Text="Aufzuteilender Monitor"/>
+                                <ComboBox x:Name="MonitorBox" Width="280" SelectionChanged="MonitorBox_SelectionChanged"/>
+                            </StackPanel>
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource Label}" Margin="0,0,0,4" Text="Hz (0 = wie Monitor)"/>
+                                <TextBox x:Name="HzBox" Width="80" Text="0" LostFocus="Field_Changed"/>
+                            </StackPanel>
+                        </WrapPanel>
+                    </Border>
+                    <WrapPanel Margin="0,0,0,8">
+                        <TextBlock Text="Vorlagen:" VerticalAlignment="Center" Margin="0,0,10,0" Foreground="{DynamicResource TextDim}"/>
+                        <Button Content="2 nebeneinander" Click="Preset_Click" Tag="half"/>
+                        <Button Content="2 übereinander" Click="Preset_Click" Tag="half-h"/>
+                        <Button Content="3 Spalten" Click="Preset_Click" Tag="thirds"/>
+                        <Button Content="Haupt + 2" Click="Preset_Click" Tag="main-stack"/>
+                        <Button Content="2 × 2" Click="Preset_Click" Tag="grid"/>
+                        <Button Content="Leeren" Click="Preset_Click" Tag="empty"/>
+                    </WrapPanel>
+                </StackPanel>
+
+                <Border DockPanel.Dock="Bottom" Style="{StaticResource Card}" Margin="0,12,0,0">
+                    <DockPanel>
+                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Bottom">
+                            <Button Content="Speichern" Click="Save_Click"/>
+                            <Button Style="{StaticResource Primary}" Content="Speichern &amp; anwenden" Click="Apply_Click" Margin="0"/>
+                        </StackPanel>
+                        <StackPanel>
+                            <TextBlock x:Name="SelectionTitle" FontWeight="SemiBold" Text="Kein Bereich gewählt"/>
+                            <WrapPanel x:Name="SelectionPanel" Margin="0,6,0,0">
+                                <StackPanel Margin="0,0,10,0"><TextBlock Style="{StaticResource Label}" Margin="0,0,0,2" Text="Name"/><TextBox x:Name="NameBox" Width="150" LostFocus="Field_Changed"/></StackPanel>
+                                <StackPanel Margin="0,0,10,0"><TextBlock Style="{StaticResource Label}" Margin="0,0,0,2" Text="X (px)"/><TextBox x:Name="XBox" Width="70" LostFocus="Field_Changed"/></StackPanel>
+                                <StackPanel Margin="0,0,10,0"><TextBlock Style="{StaticResource Label}" Margin="0,0,0,2" Text="Y (px)"/><TextBox x:Name="YBox" Width="70" LostFocus="Field_Changed"/></StackPanel>
+                                <StackPanel Margin="0,0,10,0"><TextBlock Style="{StaticResource Label}" Margin="0,0,0,2" Text="Breite"/><TextBox x:Name="WBox" Width="70" LostFocus="Field_Changed"/></StackPanel>
+                                <StackPanel Margin="0,0,16,0"><TextBlock Style="{StaticResource Label}" Margin="0,0,0,2" Text="Höhe"/><TextBox x:Name="HBox" Width="70" LostFocus="Field_Changed"/></StackPanel>
+                                <Button Content="⇆ Teilen" Click="SplitV_Click" VerticalAlignment="Bottom"/>
+                                <Button Content="⇅ Teilen" Click="SplitH_Click" VerticalAlignment="Bottom"/>
+                                <Button Content="Entfernen" Click="Remove_Click" VerticalAlignment="Bottom"/>
+                            </WrapPanel>
+                            <TextBlock x:Name="ValidationText" Foreground="{DynamicResource Danger}" Margin="0,8,0,0" TextWrapping="Wrap"/>
+                        </StackPanel>
+                    </DockPanel>
+                </Border>
+
+                <Border Style="{StaticResource Card}" Padding="4" Margin="0">
+                    <local:LayoutEditor x:Name="Editor"/>
+                </Border>
+            </DockPanel>
+
+            <!-- ============ Programme ============ -->
+            <DockPanel x:Name="PageApps" Visibility="Collapsed">
+                <StackPanel DockPanel.Dock="Top">
+                    <TextBlock Style="{StaticResource H1}" Text="Programme"/>
+                    <TextBlock Style="{StaticResource Sub}" Text="Lege fest, welches Programm auf welchem Bildschirm erscheint. Sobald es sich öffnet, schiebt MONIVOX es an seinen Platz – auch nach einem Neustart des Programms. Gilt für das oben gewählte Profil."/>
+                    <WrapPanel Margin="0,12,0,12">
+                        <Button Style="{StaticResource Primary}" Content="Programm (.exe) hinzufügen…" Click="AddExe_Click"/>
+                        <Button Content="Aus laufenden Programmen…" Click="AddRunning_Click"/>
+                    </WrapPanel>
+                </StackPanel>
+                <Border DockPanel.Dock="Bottom" Style="{StaticResource Card}" Margin="0,12,0,0">
+                    <DockPanel>
+                        <Button DockPanel.Dock="Right" Style="{StaticResource Primary}" Content="Speichern" Click="SaveApps_Click" Margin="0"/>
+                        <TextBlock Style="{StaticResource Sub}" VerticalAlignment="Center"
+                                   Text="Tipp Spiele: Bildschirm im Spiel selbst wählen und „Randloses Vollbild“ einstellen – das ist am zuverlässigsten."/>
+                    </DockPanel>
+                </Border>
+                <Border Style="{StaticResource Card}" Margin="0">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel x:Name="RulesPanel"/>
+                    </ScrollViewer>
+                </Border>
+            </DockPanel>
+
+            <!-- ============ Einstellungen ============ -->
+            <ScrollViewer x:Name="PageSettings" Visibility="Collapsed" VerticalScrollBarVisibility="Auto">
+                <StackPanel>
+                    <TextBlock Style="{StaticResource H1}" Text="Einstellungen"/>
+                    <Border Style="{StaticResource Card}" Margin="0,12,0,12">
+                        <StackPanel>
+                            <CheckBox x:Name="AutostartBox" Content="Mit Windows starten (im Infobereich unten rechts)" Click="Settings_Changed"/>
+                            <CheckBox x:Name="SplitOnStartBox" Content="Beim Start sofort das letzte Profil aktivieren (Bildschirme entstehen automatisch)" Click="Settings_Changed"/>
+                            <CheckBox x:Name="AutoUpdateBox" Content="Updates automatisch installieren" Click="Settings_Changed"/>
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <TextBlock FontWeight="SemiBold" Text="Bedienung"/>
+                            <TextBlock Style="{StaticResource Sub}" Margin="0,6,0,0" Text="• Fenster schließen: MONIVOX läuft im Infobereich weiter (unten rechts in der Taskleiste)."/>
+                            <TextBlock Style="{StaticResource Sub}" Text="• Doppelklick auf das Symbol öffnet dieses Fenster, Rechtsklick zeigt Schnellbefehle (Teilen starten/beenden, Profil wechseln)."/>
+                            <TextBlock Style="{StaticResource Sub}" Text="• Not-Aus: Strg + Alt + Shift + Q beendet die Aufteilung sofort und stellt alles wieder her."/>
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel Orientation="Horizontal">
+                            <Button Content="Nach Updates suchen" Click="CheckUpdates_Click"/>
+                            <Button Content="Protokollordner öffnen" Click="OpenLogs_Click"/>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- ============ Status ============ -->
+            <DockPanel x:Name="PageStatus" Visibility="Collapsed">
+                <StackPanel DockPanel.Dock="Top">
+                    <TextBlock Style="{StaticResource H1}" Text="Status &amp; Treiber"/>
+                    <Border Style="{StaticResource Card}" Margin="0,12,0,12">
+                        <DockPanel>
+                            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Button x:Name="InstallDriverButton" Style="{StaticResource Primary}" Content="Treiber installieren" Click="InstallDriver_Click" Margin="0"/>
+                            </StackPanel>
+                            <StackPanel>
+                                <TextBlock x:Name="DriverText" FontWeight="SemiBold" Text="Anzeigetreiber"/>
+                                <TextBlock Style="{StaticResource Sub}" Text="Offiziell signierter Virtual Display Driver (Open Source, MIT). Kein Testmodus, Secure Boot bleibt an."/>
+                            </StackPanel>
+                        </DockPanel>
+                    </Border>
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <DockPanel>
+                                <Button DockPanel.Dock="Right" Content="Erneut prüfen" Click="CheckAntiCheat_Click" Margin="0"/>
+                                <TextBlock FontWeight="SemiBold" Text="Spiele &amp; Anti-Cheat"/>
+                            </DockPanel>
+                            <StackPanel x:Name="AntiCheatPanel" Margin="0,6,0,0"/>
+                        </StackPanel>
+                    </Border>
+                    <TextBlock Style="{StaticResource Label}" Text="Protokoll"/>
+                </StackPanel>
+                <Border Style="{StaticResource Card}" Padding="8" Margin="0">
+                    <ListBox x:Name="LogList" Background="Transparent" BorderThickness="0" Foreground="{DynamicResource Text}"
+                             FontFamily="Cascadia Mono, Consolas" FontSize="12"/>
+                </Border>
+            </DockPanel>
+        </Grid>
+    </Grid>
+</Window>
