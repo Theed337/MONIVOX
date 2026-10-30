@@ -72,7 +72,31 @@ public static class VddControl
         return result;
     }
 
-    public static bool IsInstalled => FindDeviceInstances().Count > 0;
+    /// <summary>
+    /// Treiber ist im System vorhanden. Geräte existieren nur während einer Aufteilung, daher merkt sich MONIVOX
+    /// die Installation zusätzlich in der Registry.
+    /// </summary>
+    public static bool IsInstalled
+    {
+        get
+        {
+            using (var key = Registry.LocalMachine.OpenSubKey(MonivoxRegistryKey))
+                if (key?.GetValue("DriverInstalled") is int v && v == 1) return true;
+            if (FindDeviceInstances().Count == 0) return false;
+            MarkInstalled();
+            return true;
+        }
+    }
+
+    private static void MarkInstalled()
+    {
+        try
+        {
+            using var key = Registry.LocalMachine.CreateSubKey(MonivoxRegistryKey);
+            key.SetValue("DriverInstalled", 1, RegistryValueKind.DWord);
+        }
+        catch (UnauthorizedAccessException) { }
+    }
 
     /// <summary>
     /// Installiert den Treiber aus dem mitgelieferten Paket: Zertifikate aus dem Katalog als
@@ -102,13 +126,12 @@ public static class VddControl
         EnsureSettingsFile();
 
         Run("pnputil.exe", $"/add-driver \"{inf}\" /install", log, allowed: [0, 259, 3010]);
-        if (FindDeviceInstances().Count == 0)
+        using (var key = Registry.LocalMachine.CreateSubKey(MonivoxRegistryKey))
         {
-            Run(Path.Combine(AppContext.BaseDirectory, "MonivoxDevice.exe"), "create", log, allowed: [0]);
-            using var key = Registry.LocalMachine.CreateSubKey(MonivoxRegistryKey);
             key.SetValue("InstalledVdd", 1, RegistryValueKind.DWord);
+            key.SetValue("DriverInstalled", 1, RegistryValueKind.DWord);
         }
-        log("Anzeigetreiber installiert.");
+        log("Anzeigetreiber installiert. Die virtuellen Monitore entstehen beim Teilen.");
     }
 
     /// <summary>Entfernt den Treiber – aber nur, wenn MONIVOX ihn selbst installiert hat.</summary>
@@ -137,12 +160,13 @@ public static class VddControl
     /// <summary>
     /// Stellt die gewünschte Zahl virtueller Monitore bereit – jeder an einem EIGENEN Treibergerät.
     /// Hintergrund: Mehrere Monitore an einem Gerät lassen Windows auf allen Monitoren ruckeln (bekannter Fehler
-    /// des Virtual Display Driver, upstream Issue #140). Nicht benötigte Geräte werden deaktiviert, damit der
-    /// Treiber keinerlei Last erzeugt.
+    /// des Virtual Display Driver, upstream Issue #140). Die Geräte werden beim Teilen angelegt und beim Beenden
+    /// entfernt – Ein-/Ausschalten per pnputil verweigert Windows bei Software-Geräten oft ("Neustart ausstehend").
     /// </summary>
     /// <returns>true, wenn sich etwas geändert hat und auf die Monitore gewartet werden muss.</returns>
     public static bool Configure(int monitorCount, IReadOnlyCollection<DisplayMode> modes, Action<string> log)
     {
+        MarkInstalled();
         EnsureSettingsFile();
         XDocument doc;
         try { doc = XDocument.Load(SettingsPath, LoadOptions.PreserveWhitespace); }
@@ -156,59 +180,72 @@ public static class VddControl
         bool settingsChanged = VddSettings.Apply(doc, 1, modes);
         if (settingsChanged) doc.Save(SettingsPath);
 
-        var instances = EnsureDeviceCount(monitorCount, log);
-        bool changed = false;
-        for (int i = 0; i < instances.Count; i++)
+        // Überzählige MONIVOX-Geräte entfernen, fehlende anlegen
+        var existing = MonivoxDeviceNumbers();
+        var extra = existing.Where(n => n > monitorCount).ToList();
+        if (extra.Count > 0) RunDeviceTool("remove " + string.Join(" ", extra), log);
+        bool created = existing.Count(n => n <= monitorCount) < monitorCount;
+        if (created)
         {
-            bool want = i < monitorCount;
-            bool disabled = IsDisabled(instances[i]);
-            if (want && disabled)
+            log($"Lege {monitorCount} Treibergeräte an …");
+            RunDeviceTool($"create {monitorCount}", log);
+        }
+
+        // Von älteren Versionen deaktivierte Geräte wieder einschalten – notfalls neu anlegen
+        foreach (var instance in SortedInstances().Where(IsDisabled))
+        {
+            try { Run("pnputil.exe", $"/enable-device \"{instance}\"", log, allowed: [0, 3010]); }
+            catch (InvalidOperationException)
             {
-                Run("pnputil.exe", $"/enable-device \"{instances[i]}\"", log, allowed: [0, 3010]);
-                changed = true;
+                int n = DeviceNumber(instance);
+                log($"Gerät {instance} ließ sich nicht einschalten – lege es neu an.");
+                RunDeviceTool($"remove {n}", log);
+                RunDeviceTool($"create {monitorCount}", log);
             }
-            else if (want && settingsChanged)
+            created = true;
+        }
+
+        if (!created && settingsChanged)
+        {
+            // Neue Auflösungen: Geräte neu starten, damit der Treiber die Datei neu liest
+            foreach (var instance in SortedInstances().Take(monitorCount))
             {
-                Run("pnputil.exe", $"/restart-device \"{instances[i]}\"", log, allowed: [0, 3010]);
-                changed = true;
-            }
-            else if (!want && !disabled)
-            {
-                Run("pnputil.exe", $"/disable-device \"{instances[i]}\"", log, allowed: [0, 3010]);
+                try { Run("pnputil.exe", $"/restart-device \"{instance}\"", log, allowed: [0, 3010]); }
+                catch (InvalidOperationException)
+                {
+                    RunDeviceTool($"remove {DeviceNumber(instance)}", log);
+                    RunDeviceTool($"create {monitorCount}", log);
+                }
             }
         }
-        if (changed || settingsChanged)
+        if (created || settingsChanged)
             log($"Anzeigetreiber: {monitorCount} virtuelle Monitore (je ein Gerät), Modi {string.Join(", ", modes.Distinct())}.");
-        return changed || settingsChanged;
+        return created || settingsChanged;
     }
 
-    /// <summary>Deaktiviert alle Treibergeräte (nach dem Beenden der Aufteilung – null Last im Normalbetrieb).</summary>
-    public static void DisableAll(Action<string> log)
+    /// <summary>Entfernt alle MONIVOX-Treibergeräte (nach dem Beenden der Aufteilung – null Last im Normalbetrieb).</summary>
+    public static void DisableAll(Action<string> log) => RemoveDevices(log);
+
+    private static void RemoveDevices(Action<string> log)
     {
-        foreach (var instance in FindDeviceInstances())
-        {
-            if (IsDisabled(instance)) continue;
-            try { Run("pnputil.exe", $"/disable-device \"{instance}\"", log, allowed: [0, 3010]); }
-            catch (InvalidOperationException e) { log($"Gerät {instance} ließ sich nicht deaktivieren: {e.Message}"); }
-        }
+        MarkInstalled();
+        var numbers = MonivoxDeviceNumbers();
+        if (numbers.Count == 0) return;
+        try { RunDeviceTool("remove " + string.Join(" ", numbers), log); }
+        catch (InvalidOperationException e) { log($"Treibergeräte entfernen: {e.Message}"); }
     }
 
-    /// <summary>Sorgt dafür, dass mindestens <paramref name="count"/> Treibergeräte existieren (sortiert).</summary>
-    private static IReadOnlyList<string> EnsureDeviceCount(int count, Action<string> log)
-    {
-        var instances = SortedInstances();
-        if (instances.Count < count)
-        {
-            log($"Lege {count - instances.Count} weitere Treibergeräte an …");
-            Run(Path.Combine(AppContext.BaseDirectory, "MonivoxDevice.exe"), $"create {count}", log, allowed: [0]);
-            var sw = Stopwatch.StartNew();
-            while ((instances = SortedInstances()).Count < count && sw.Elapsed < TimeSpan.FromSeconds(15))
-                Thread.Sleep(300);
-            if (instances.Count < count)
-                throw new InvalidOperationException($"Es konnten nur {instances.Count} von {count} Treibergeräten angelegt werden.");
-        }
-        return instances;
-    }
+    private static void RunDeviceTool(string args, Action<string> log) =>
+        Run(Path.Combine(AppContext.BaseDirectory, "MonivoxDevice.exe"), args, log, allowed: [0]);
+
+    /// <summary>Nummern der vorhandenen MONIVOX-Geräte (MttVDD = 1, MttVDD2 = 2, …).</summary>
+    private static List<int> MonivoxDeviceNumbers() =>
+        FindDeviceInstances()
+            .Where(id => id.StartsWith(@"SWD\Monivox\", StringComparison.OrdinalIgnoreCase))
+            .Select(DeviceNumber)
+            .Distinct()
+            .OrderBy(n => n)
+            .ToList();
 
     /// <summary>MONIVOX-Geräte zuerst in fester Reihenfolge (MttVDD, MttVDD2, …), danach fremde.</summary>
     private static List<string> SortedInstances() =>

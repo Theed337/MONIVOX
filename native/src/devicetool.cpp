@@ -1,7 +1,7 @@
 // MonivoxDevice – legt Software-Geräte für den mitgelieferten Virtual Display Driver an oder entfernt sie.
 //
-//   MonivoxDevice.exe create [N]   -> sorgt dafür, dass die Geräte 1..N existieren (Standard 1)
-//   MonivoxDevice.exe remove [N]   -> entfernt die Geräte 1..N (Standard 24)
+//   MonivoxDevice.exe create [N]       -> sorgt dafür, dass die Geräte 1..N existieren (Standard 1)
+//   MonivoxDevice.exe remove i [j …]   -> entfernt die Geräte mit den angegebenen Nummern
 //
 // Warum mehrere Geräte? Der Virtual Display Driver hat einen bekannten Fehler: Laufen zwei oder mehr virtuelle
 // Monitore an EINEM Treibergerät, bremst Windows auf allen Monitoren aus (Ruckeln beim Fensterziehen).
@@ -16,6 +16,7 @@
 #include <cstdio>
 #include <cwchar>
 #include <string>
+#include <vector>
 
 namespace
 {
@@ -80,16 +81,30 @@ int wmain(int argc, wchar_t** argv)
 {
     if (argc < 2 || (_wcsicmp(argv[1], L"create") != 0 && _wcsicmp(argv[1], L"remove") != 0))
     {
-        fwprintf(stderr, L"Aufruf: MonivoxDevice.exe create [Anzahl] | remove [Anzahl]\n");
+        fwprintf(stderr, L"Aufruf: MonivoxDevice.exe create [Anzahl] | remove Nummer [Nummer …]\n");
         return 2;
     }
     const bool create = _wcsicmp(argv[1], L"create") == 0;
-    int count = argc >= 3 ? _wtoi(argv[2]) : (create ? 1 : kMaxDevices);
-    if (count < 1) count = 1;
-    if (count > kMaxDevices) count = kMaxDevices;
+
+    std::vector<int> indices;
+    if (create)
+    {
+        int count = argc >= 3 ? _wtoi(argv[2]) : 1;
+        if (count < 1) count = 1;
+        if (count > kMaxDevices) count = kMaxDevices;
+        for (int i = 1; i <= count; ++i) indices.push_back(i);
+    }
+    else
+    {
+        for (int a = 2; a < argc; ++a)
+        {
+            int i = _wtoi(argv[a]);
+            if (i >= 1 && i <= kMaxDevices) indices.push_back(i);
+        }
+    }
 
     int failures = 0;
-    for (int i = 1; i <= count; ++i)
+    for (int i : indices)
     {
         std::wstring id;
         HRESULT hr = TouchDevice(i, create, id);

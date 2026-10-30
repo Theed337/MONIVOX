@@ -132,7 +132,7 @@ public sealed class SplitSession(SplitOptions options, Action<string> log)
 
             try
             {
-                virtuals = WaitForVirtualDisplays(virtualSpecs.Count, TimeSpan.FromSeconds(10));
+                virtuals = WaitForVirtualDisplays(virtualSpecs.Count, TimeSpan.FromSeconds(8 + 2 * virtualSpecs.Count));
             }
             catch (InvalidOperationException)
             {
