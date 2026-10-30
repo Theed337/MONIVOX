@@ -345,6 +345,8 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
         std::optional<POINT> ToDesktop(POINT layout) const;
         bool ForeignClipActive() const;
         void Teleport(POINT p);
+        void SetOwnClip(const RECT* r);
+        std::optional<RECT> m_OwnClip;
 
         static LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
 
@@ -885,7 +887,7 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
     // zugeschlagen (einmalig, damit nicht ständig Änderungsmeldungen an alle Fenster gehen).
     void Compositor::UpdateTaskbars()
     {
-        bool any = false;
+        bool any = m_Cfg.Direct.has_value();
         for (auto& v : m_Views) any |= v->Cfg.HideTaskbar;
         if (!any) return;
 
@@ -894,6 +896,14 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
         for (HWND tb : scan.Windows)
         {
             HMONITOR mon = MonitorFromWindow(tb, MONITOR_DEFAULTTONULL);
+            // Direktbereich-Modus: Die Taskleiste des echten Monitors läge quer über den virtuellen Bereichen und
+            // verdeckt deren eigene Taskleisten – ausblenden (nach dem Beenden wird sie wieder eingeblendet).
+            if (m_Cfg.Direct && mon == m_Physical.Handle && IsWindowVisible(tb))
+            {
+                ShowWindow(tb, SW_HIDE);
+                if (std::find(m_HiddenTaskbars.begin(), m_HiddenTaskbars.end(), tb) == m_HiddenTaskbars.end())
+                    m_HiddenTaskbars.push_back(tb);
+            }
             for (auto& v : m_Views)
             {
                 if (!v->Cfg.HideTaskbar || v->Source.Handle != mon) continue;
@@ -1175,11 +1185,28 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
         RECT all{ GetSystemMetrics(SM_XVIRTUALSCREEN), GetSystemMetrics(SM_YVIRTUALSCREEN), 0, 0 };
         all.right = all.left + GetSystemMetrics(SM_CXVIRTUALSCREEN);
         all.bottom = all.top + GetSystemMetrics(SM_CYVIRTUALSCREEN);
-        return !EqualRect(&clip, &all);
+        if (EqualRect(&clip, &all)) return false;
+        if (m_OwnClip && EqualRect(&clip, &*m_OwnClip)) return false; // unsere eigene Begrenzung
+        return true;
+    }
+
+    // Hält die Maus im aktuellen Bereich (Direktbereich bzw. virtueller Monitor). Am Rand übergibt die Brücke
+    // sie dann sauber an den Nachbarbereich – ohne dass sie kurz auf dem verdeckten Teil des Monitors auftaucht.
+    void Compositor::SetOwnClip(const RECT* r)
+    {
+        if (r == nullptr)
+        {
+            if (m_OwnClip) { ClipCursor(nullptr); m_OwnClip.reset(); }
+            return;
+        }
+        if (m_OwnClip && EqualRect(&*m_OwnClip, r)) return;
+        m_OwnClip = *r;
+        ClipCursor(r);
     }
 
     void Compositor::Teleport(POINT p)
     {
+        if (m_OwnClip) { ClipCursor(nullptr); m_OwnClip.reset(); }
         SetCursorPos(p.x, p.y);
         m_LastPos = p;
         m_LastLoc = Locate(p);
@@ -1241,14 +1268,27 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
             return;
         }
 
-        // 3) Maus stößt am Rand eines virtuellen Monitors an -> im Monitorbild weiter
-        if (loc.Kind == AreaKind::Virtual && (sx != 0 || sy != 0))
+        // 3) Maus stößt am Rand ihres Bereichs an -> im Monitorbild an den Nachbarbereich übergeben
+        const RECT* area = nullptr;
+        if (loc.Kind == AreaKind::Virtual) area = &m_Views[loc.View]->Source.Rect;
+        else if (loc.Kind == AreaKind::Direct) area = &m_DirectScreen;
+
+        if (area && (sx != 0 || sy != 0))
         {
-            const RECT& s = m_Views[loc.View]->Source.Rect;
-            bool atEdge = (sx > 0 && p.x >= s.right - 1) || (sx < 0 && p.x <= s.left) ||
-                          (sy > 0 && p.y >= s.bottom - 1) || (sy < 0 && p.y <= s.top);
-            if (atEdge && stepFrom(loc, p)) return;
+            bool atEdge = (sx > 0 && p.x >= area->right - 1) || (sx < 0 && p.x <= area->left) ||
+                          (sy > 0 && p.y >= area->bottom - 1) || (sy < 0 && p.y <= area->top);
+            if (atEdge && stepFrom(loc, p))
+            {
+                // im neuen Bereich festhalten
+                Location now = Locate(m_LastPos);
+                if (now.Kind == AreaKind::Virtual) SetOwnClip(&m_Views[now.View]->Source.Rect);
+                else if (now.Kind == AreaKind::Direct) SetOwnClip(&m_DirectScreen);
+                return;
+            }
         }
+        // Nur mit Direktbereich bzw. hochskalierten Bereichen festhalten; normale Monitore bleiben frei
+        if (m_UseRawInput && area) SetOwnClip(area);
+        else if (loc.Kind == AreaKind::Other) SetOwnClip(nullptr);
         accept();
     }
 
@@ -1267,6 +1307,7 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
             if (view->Pool) view->Pool.Close();
             if (view->Hwnd) DestroyWindow(view->Hwnd);
         }
+        SetOwnClip(nullptr);
         RestoreTaskbars();
         m_Views.clear();
         if (m_WorkAreaSet)
