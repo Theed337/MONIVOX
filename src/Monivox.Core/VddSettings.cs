@@ -20,7 +20,7 @@ public static class VddSettings
             new XElement("gpu", new XElement("friendlyname", "default")),
             new XElement("global", new XElement("g_refresh_rate", 60)),
             new XElement("resolutions"),
-            new XElement("options", new XElement("HardwareCursor", "false"))));
+            new XElement("options", new XElement("HardwareCursor", "true"))));
 
     /// <summary>
     /// Setzt die Monitoranzahl und stellt sicher, dass jeder benötigte Modus angeboten wird.
@@ -43,13 +43,13 @@ public static class VddSettings
             changed = true;
         }
 
-        // Software-Mauszeiger: Windows zeichnet den Zeiger dann ins Bild des virtuellen Monitors. Mit Hardware-Zeiger
-        // fehlt er in der Aufnahme bzw. wird nur bei Bildänderungen aktualisiert (wirkt wie 10 fps).
+        // Hardware-Mauszeiger: Windows zeichnet den Zeiger NICHT ins Bild des virtuellen Monitors. MONIVOX zeichnet ihn
+        // selbst mit ~1000 Hz an die richtige Stelle – reagiert dadurch so schnell wie auf einem echten Monitor.
         var options = GetOrAdd(root, "options");
         var cursor = GetOrAdd(options, "HardwareCursor");
-        if (!string.Equals(cursor.Value.Trim(), "false", StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(cursor.Value.Trim(), "true", StringComparison.OrdinalIgnoreCase))
         {
-            cursor.Value = "false";
+            cursor.Value = "true";
             changed = true;
         }
 

@@ -26,6 +26,7 @@
 #include <share.h>
 #include <d3d11_4.h>
 #include <dxgi1_6.h>
+#include <mmsystem.h>
 #include <d3dcompiler.h>
 #include <wrl/client.h>
 
@@ -39,6 +40,7 @@
 #include <windows.graphics.directx.direct3d11.interop.h>
 
 #include <algorithm>
+#include <climits>
 #include <atomic>
 #include <cmath>
 #include <cstdio>
@@ -348,6 +350,14 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
         void SetOwnClip(const RECT* r);
         std::optional<RECT> m_OwnClip;
 
+        // Eigener Mauszeiger auf den virtuellen Bereichen: Der echte Zeiger steht dann auf einem unsichtbaren
+        // virtuellen Monitor. Statt ihn (verzögert) im aufgenommenen Bild zu zeigen, zeichnet MONIVOX ihn mit
+        // ~1000 Hz direkt an die passende Stelle – so reagiert er überall gleich schnell.
+        void CursorLoop();
+        std::thread m_CursorThread;
+        std::atomic<bool> m_StopCursor{ false };
+        HWND m_CursorWnd = nullptr;
+
         static LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
 
         Config m_Cfg;
@@ -594,7 +604,7 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
         View* raw = &view;
         view.FrameToken = view.Pool.FrameArrived([this, raw](auto const& pool, auto const&) { OnFrame(*raw, pool); });
         view.Session = view.Pool.CreateCaptureSession(view.Item);
-        view.Session.IsCursorCaptureEnabled(true);
+        view.Session.IsCursorCaptureEnabled(false); // Mauszeiger zeichnet MONIVOX selbst (CursorLoop)
         try { view.Session.IsBorderRequired(false); } catch (...) {}
         view.Session.StartCapture();
         return true;
@@ -928,6 +938,103 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
         for (HWND tb : m_HiddenTaskbars)
             if (IsWindow(tb)) ShowWindow(tb, SW_SHOWNA);
         m_HiddenTaskbars.clear();
+    }
+
+    void Compositor::CursorLoop()
+    {
+        SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+        timeBeginPeriod(1);
+        const int size = 96;
+        m_CursorWnd = CreateWindowExW(WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                                      L"MonivoxView", L"", WS_POPUP, 0, 0, size, size, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+
+        HDC screen = GetDC(nullptr);
+        HDC mem = CreateCompatibleDC(screen);
+        BITMAPINFO bi{};
+        bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
+        bi.bmiHeader.biWidth = size;
+        bi.bmiHeader.biHeight = -size;
+        bi.bmiHeader.biPlanes = 1;
+        bi.bmiHeader.biBitCount = 32;
+        void* bits = nullptr;
+        HBITMAP bmp = CreateDIBSection(mem, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+        HGDIOBJ old = SelectObject(mem, bmp);
+
+        HCURSOR shownCursor = nullptr;
+        POINT hotspot{};
+        bool visible = false;
+        POINT lastPos{ INT_MIN, INT_MIN };
+
+        while (!m_StopCursor)
+        {
+            CURSORINFO ci{ sizeof(ci) };
+            bool ok = GetCursorInfo(&ci) && (ci.flags & CURSOR_SHOWING);
+            int view = -1;
+            if (ok)
+                for (size_t i = 0; i < m_Views.size(); ++i)
+                    if (Contains(m_Views[i]->Source.Rect, ci.ptScreenPos)) { view = static_cast<int>(i); break; }
+
+            if (view < 0)
+            {
+                if (visible) { ShowWindow(m_CursorWnd, SW_HIDE); visible = false; }
+            }
+            else
+            {
+                if (ci.hCursor != shownCursor)
+                {
+                    // Zeigerform (Pfeil, Hand, Text …) neu zeichnen, inkl. Alphakanal
+                    shownCursor = ci.hCursor;
+                    std::fill(static_cast<UINT32*>(bits), static_cast<UINT32*>(bits) + size * size, 0u);
+                    ICONINFO ii{};
+                    if (GetIconInfo(ci.hCursor, &ii))
+                    {
+                        hotspot = { static_cast<LONG>(ii.xHotspot), static_cast<LONG>(ii.yHotspot) };
+                        if (ii.hbmMask) DeleteObject(ii.hbmMask);
+                        if (ii.hbmColor) DeleteObject(ii.hbmColor);
+                    }
+                    DrawIconEx(mem, 0, 0, ci.hCursor, 0, 0, 0, nullptr, DI_NORMAL);
+                    // Monochrome Zeiger haben kein Alpha – sichtbare Pixel deckend machen
+                    auto* px = static_cast<UINT32*>(bits);
+                    bool anyAlpha = false;
+                    for (int i = 0; i < size * size; ++i) anyAlpha |= (px[i] >> 24) != 0;
+                    if (!anyAlpha)
+                        for (int i = 0; i < size * size; ++i) if (px[i] & 0x00FFFFFF) px[i] |= 0xFF000000u;
+                    lastPos = { INT_MIN, INT_MIN };
+                }
+
+                const auto& v = *m_Views[view];
+                const RECT& src = v.Source.Rect;
+                LONG x = v.Screen.left + static_cast<LONG>((ci.ptScreenPos.x - src.left) * static_cast<double>(W(v.Screen)) / W(src));
+                LONG y = v.Screen.top + static_cast<LONG>((ci.ptScreenPos.y - src.top) * static_cast<double>(H(v.Screen)) / H(src));
+                POINT dst{ x - hotspot.x, y - hotspot.y };
+                if (dst.x != lastPos.x || dst.y != lastPos.y || !visible)
+                {
+                    POINT zero{ 0, 0 };
+                    SIZE sz{ size, size };
+                    BLENDFUNCTION blend{ AC_SRC_OVER, 0, 255, AC_SRC_ALPHA };
+                    UpdateLayeredWindow(m_CursorWnd, screen, &dst, &sz, mem, &zero, 0, &blend, ULW_ALPHA);
+                    if (!visible)
+                    {
+                        SetWindowPos(m_CursorWnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+                        visible = true;
+                    }
+                    lastPos = dst;
+                }
+            }
+
+            // Fensternachrichten dieses Threads abarbeiten, dann ~1 ms warten
+            MSG msg;
+            while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) DispatchMessageW(&msg);
+            MsgWaitForMultipleObjects(0, nullptr, FALSE, 1, QS_ALLINPUT);
+        }
+
+        SelectObject(mem, old);
+        DeleteObject(bmp);
+        DeleteDC(mem);
+        ReleaseDC(nullptr, screen);
+        DestroyWindow(m_CursorWnd);
+        m_CursorWnd = nullptr;
+        timeEndPeriod(1);
     }
 
     void Compositor::LogStats()
@@ -1296,6 +1403,8 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
 
     void Compositor::Shutdown()
     {
+        m_StopCursor = true;
+        if (m_CursorThread.joinable()) m_CursorThread.join();
         for (auto& view : m_Views)
         {
             view->StopDup = true;
@@ -1436,6 +1545,7 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
 
         ApplyWorkArea();
         SetFrames(m_Cfg.Frames);
+        m_CursorThread = std::thread([this] { CursorLoop(); });
         GetCursorPos(&m_LastPos);
         m_LastLoc = Locate(m_LastPos);
         Log(L"Compositor läuft: %zu virtuelle Bereiche%s", m_Views.size(), m_Cfg.Direct ? L" + Direktbereich" : L"");

@@ -199,7 +199,7 @@ public class ConfigFormatTests
               <monitors><count>1</count></monitors>
               <global><g_refresh_rate>60</g_refresh_rate></global>
               <resolutions><resolution><width>1920</width><height>1080</height><refresh_rate>60</refresh_rate></resolution></resolutions>
-              <options><HardwareCursor>true</HardwareCursor></options>
+              <options><HardwareCursor>false</HardwareCursor></options>
             </vdd_settings>
             """);
         bool changed = VddSettings.Apply(doc, 2, [new DisplayMode(1920, 2160, 144), new DisplayMode(1920, 1080, 60)]);
@@ -210,7 +210,7 @@ public class ConfigFormatTests
         Assert.Equal(2, res.Count);
         Assert.Contains(res, r => r.Element("width")!.Value == "1920" && r.Element("height")!.Value == "2160");
         Assert.Contains(doc.Root!.Element("global")!.Elements("g_refresh_rate"), e => e.Value == "144");
-        Assert.Equal("false", doc.Root!.Element("options")!.Element("HardwareCursor")!.Value);
+        Assert.Equal("true", doc.Root!.Element("options")!.Element("HardwareCursor")!.Value);
 
         Assert.False(VddSettings.Apply(doc, 2, [new DisplayMode(1920, 2160, 144)]));
     }
