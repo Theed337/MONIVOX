@@ -405,7 +405,7 @@ public sealed class LayoutEditor : FrameworkElement
                 if (le.HasFlag(Edge.Right)) r = mine.X;
                 if (le.HasFlag(Edge.Top)) t = mine.Bottom;
                 if (le.HasFlag(Edge.Bottom)) b = mine.Y;
-                _regions[i] = Clamp(new NormRect(l, t, r - l, b - t));
+                _regions[li] = Clamp(new NormRect(l, t, r - l, b - t));
             }
         }
         InvalidateVisual();
