@@ -23,6 +23,7 @@
 
 #include <windows.h>
 #include <shellapi.h>
+#include <share.h>
 #include <d3d11_4.h>
 #include <dxgi1_6.h>
 #include <d3dcompiler.h>
@@ -279,7 +280,16 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
         winrt::event_token FrameToken{};
         winrt::Windows::Graphics::SizeInt32 PoolSize{};
 
-        // Desktop Duplication (bevorzugt): liefert jedes Bild, das Windows für den Monitor zusammensetzt
+        // Desktop Duplication (bevorzugt): liefert jedes Bild, das Windows für den Monitor zusammensetzt.
+        // Jeder Bereich hat dabei sein EIGENES D3D-Gerät und einen eigenen Thread: Aufnahme -> Kopie -> Zeichnen ->
+        // Present im Monitortakt. Keine gemeinsamen Sperren, kein Rückstau zwischen den Bereichen.
+        ComPtr<ID3D11Device> Device;
+        ComPtr<ID3D11DeviceContext> Context;
+        ComPtr<ID3D11VertexShader> Vs;
+        ComPtr<ID3D11PixelShader> Ps;
+        ComPtr<ID3D11SamplerState> Sampler;
+        HANDLE FrameLatency = nullptr;
+        std::atomic<unsigned> Frames{ 0 };
         ComPtr<IDXGIOutput1> DupOutput;
         ComPtr<IDXGIOutputDuplication> Dup;
         std::thread DupThread;
@@ -367,6 +377,7 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
         POINT m_LastPos{};
         Location m_LastLoc;
         bool m_UseRawInput = false;
+        DWORD m_MainThread = 0;
 
         // Taskleisten auf virtuellen Bereichen ausblenden
         std::vector<HWND> m_HiddenTaskbars;
@@ -519,12 +530,23 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
             desc.BufferCount = 2;
             desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
             desc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
-            HRESULT hr = factory->CreateSwapChainForHwnd(m_Device.Get(), view->Hwnd, &desc, nullptr, nullptr, &view->SwapChain);
+            ID3D11Device* dev = view->UsesDda ? view->Device.Get() : m_Device.Get();
+            if (view->UsesDda) desc.Flags = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
+            HRESULT hr = factory->CreateSwapChainForHwnd(dev, view->Hwnd, &desc, nullptr, nullptr, &view->SwapChain);
             if (FAILED(hr)) { Log(L"Swapchain: 0x%08X", hr); return false; }
             factory->MakeWindowAssociation(view->Hwnd, DXGI_MWA_NO_ALT_ENTER);
+            if (view->UsesDda)
+            {
+                ComPtr<IDXGISwapChain2> sc2;
+                if (SUCCEEDED(view->SwapChain.As(&sc2)))
+                {
+                    sc2->SetMaximumFrameLatency(1);
+                    view->FrameLatency = sc2->GetFrameLatencyWaitableObject();
+                }
+            }
             ComPtr<ID3D11Texture2D> back;
             view->SwapChain->GetBuffer(0, IID_PPV_ARGS(&back));
-            m_Device->CreateRenderTargetView(back.Get(), nullptr, &view->Rtv);
+            dev->CreateRenderTargetView(back.Get(), nullptr, &view->Rtv);
             ShowWindow(view->Hwnd, SW_SHOWNOACTIVATE);
         }
 
@@ -656,76 +678,150 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
         if (!output) return false;
         if (FAILED(output.As(&view.DupOutput))) return false;
 
-        HRESULT hr = E_FAIL;
+        // Eigenes Gerät für diesen Bereich
+        D3D_FEATURE_LEVEL levels[] = { D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0 };
+        HRESULT hr = D3D11CreateDevice(adapter.Get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                                       levels, ARRAYSIZE(levels), D3D11_SDK_VERSION, &view.Device, nullptr, &view.Context);
+        if (FAILED(hr)) return false;
+        ComPtr<ID3DBlob> vs, ps, err;
+        if (FAILED(D3DCompile(kShaderSource, sizeof(kShaderSource) - 1, "blit", nullptr, nullptr, "VSMain", "vs_5_0", 0, 0, &vs, &err))) return false;
+        if (FAILED(D3DCompile(kShaderSource, sizeof(kShaderSource) - 1, "blit", nullptr, nullptr, "PSMain", "ps_5_0", 0, 0, &ps, &err))) return false;
+        view.Device->CreateVertexShader(vs->GetBufferPointer(), vs->GetBufferSize(), nullptr, &view.Vs);
+        view.Device->CreatePixelShader(ps->GetBufferPointer(), ps->GetBufferSize(), nullptr, &view.Ps);
+        D3D11_SAMPLER_DESC sd{};
+        sd.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+        sd.AddressU = sd.AddressV = sd.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+        sd.MaxLOD = D3D11_FLOAT32_MAX;
+        view.Device->CreateSamplerState(&sd, &view.Sampler);
+
+        hr = E_FAIL;
         ComPtr<IDXGIOutput5> out5;
         if (SUCCEEDED(view.DupOutput.As(&out5)))
         {
             const DXGI_FORMAT formats[] = { DXGI_FORMAT_B8G8R8A8_UNORM };
-            hr = out5->DuplicateOutput1(m_Device.Get(), 0, 1, formats, &view.Dup);
+            hr = out5->DuplicateOutput1(view.Device.Get(), 0, 1, formats, &view.Dup);
         }
-        if (FAILED(hr)) hr = view.DupOutput->DuplicateOutput(m_Device.Get(), &view.Dup);
+        if (FAILED(hr)) hr = view.DupOutput->DuplicateOutput(view.Device.Get(), &view.Dup);
         if (FAILED(hr))
         {
             Log(L"DuplicateOutput: 0x%08X", hr);
             view.DupOutput.Reset();
+            view.Device.Reset();
+            view.Context.Reset();
             return false;
         }
         view.UsesDda = true;
-        View* raw = &view;
-        view.DupThread = std::thread([this, raw] { DdaLoop(*raw); });
         return true;
     }
 
     void Compositor::DdaLoop(View& view)
     {
-        // Höhere Priorität, damit Bilder auch unter Last pünktlich abgeholt werden
         SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+        ComPtr<ID3D11Texture2D> copy;
+        ComPtr<ID3D11ShaderResourceView> srv;
+        UINT copyW = 0, copyH = 0;
+        const float black[4] = { 0, 0, 0, 1 };
+
+        auto reconnect = [&]
+        {
+            view.Dup.Reset();
+            Sleep(100);
+            HRESULT hr = E_FAIL;
+            ComPtr<IDXGIOutput5> out5;
+            if (SUCCEEDED(view.DupOutput.As(&out5)))
+            {
+                const DXGI_FORMAT formats[] = { DXGI_FORMAT_B8G8R8A8_UNORM };
+                hr = out5->DuplicateOutput1(view.Device.Get(), 0, 1, formats, &view.Dup);
+            }
+            if (FAILED(hr)) view.DupOutput->DuplicateOutput(view.Device.Get(), &view.Dup);
+        };
+
         while (!view.StopDup)
         {
-            if (!view.Dup)
-            {
-                // Zugriff verloren (z. B. Moduswechsel, UAC-Dialog) – neu verbinden
-                Sleep(100);
-                ComPtr<IDXGIOutput5> out5;
-                HRESULT hr = E_FAIL;
-                if (SUCCEEDED(view.DupOutput.As(&out5)))
-                {
-                    const DXGI_FORMAT formats[] = { DXGI_FORMAT_B8G8R8A8_UNORM };
-                    hr = out5->DuplicateOutput1(m_Device.Get(), 0, 1, formats, &view.Dup);
-                }
-                if (FAILED(hr)) view.DupOutput->DuplicateOutput(m_Device.Get(), &view.Dup);
-                continue;
-            }
+            if (!view.Dup) { reconnect(); continue; }
 
             DXGI_OUTDUPL_FRAME_INFO info{};
             ComPtr<IDXGIResource> resource;
-            HRESULT hr = view.Dup->AcquireNextFrame(100, &info, &resource);
+            HRESULT hr = view.Dup->AcquireNextFrame(50, &info, &resource);
             if (hr == DXGI_ERROR_WAIT_TIMEOUT) continue;
-            if (hr == DXGI_ERROR_ACCESS_LOST || hr == DXGI_ERROR_INVALID_CALL)
-            {
-                view.Dup.Reset();
-                continue;
-            }
+            if (hr == DXGI_ERROR_ACCESS_LOST || hr == DXGI_ERROR_INVALID_CALL) { reconnect(); continue; }
             if (FAILED(hr))
             {
-                Log(L"AcquireNextFrame: 0x%08X", hr);
-                view.Dup.Reset();
-                Sleep(200);
+                Log(L"%s: AcquireNextFrame 0x%08X", view.Cfg.Device.c_str(), hr);
+                reconnect();
                 continue;
             }
-            // Nur neue Bildinhalte kopieren (reine Mauszeiger-Updates ohne Bild überspringen)
-            if (info.LastPresentTime.QuadPart != 0 || info.AccumulatedFrames > 0)
+
+            bool newImage = info.LastPresentTime.QuadPart != 0 || info.AccumulatedFrames > 0;
+            if (newImage)
             {
                 ComPtr<ID3D11Texture2D> tex;
                 if (SUCCEEDED(resource.As(&tex)))
                 {
                     D3D11_TEXTURE2D_DESC d{};
                     tex->GetDesc(&d);
-                    StoreFrame(view, tex.Get(), d.Width, d.Height);
+                    if (!copy || copyW != d.Width || copyH != d.Height)
+                    {
+                        D3D11_TEXTURE2D_DESC cd{};
+                        cd.Width = d.Width;
+                        cd.Height = d.Height;
+                        cd.MipLevels = 1;
+                        cd.ArraySize = 1;
+                        cd.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+                        cd.SampleDesc.Count = 1;
+                        cd.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+                        copy.Reset();
+                        srv.Reset();
+                        if (SUCCEEDED(view.Device->CreateTexture2D(&cd, nullptr, &copy)))
+                            view.Device->CreateShaderResourceView(copy.Get(), nullptr, &srv);
+                        copyW = d.Width;
+                        copyH = d.Height;
+                    }
+                    if (copy) view.Context->CopyResource(copy.Get(), tex.Get());
                 }
             }
             resource.Reset();
-            view.Dup->ReleaseFrame();
+            view.Dup->ReleaseFrame(); // so früh wie möglich zurückgeben
+
+            if (!newImage || !srv || !view.Rtv) continue;
+
+            ULONGLONG now = GetTickCount64();
+            if (view.LastFrameMs != 0)
+            {
+                unsigned gap = static_cast<unsigned>(now - view.LastFrameMs);
+                unsigned prev = view.MaxGapMs.load();
+                while (gap > prev && !view.MaxGapMs.compare_exchange_weak(prev, gap)) {}
+            }
+            view.LastFrameMs = now;
+
+            // Nicht mehr Bilder vorbereiten, als der Monitor anzeigen kann (verhindert Rückstau)
+            if (view.FrameLatency) WaitForSingleObjectEx(view.FrameLatency, 100, FALSE);
+
+            view.Context->OMSetRenderTargets(1, view.Rtv.GetAddressOf(), nullptr);
+            view.Context->ClearRenderTargetView(view.Rtv.Get(), black);
+            D3D11_VIEWPORT vp{ 0, 0, static_cast<float>(W(view.Screen)), static_cast<float>(H(view.Screen)), 0, 1 };
+            view.Context->RSSetViewports(1, &vp);
+            view.Context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            view.Context->IASetInputLayout(nullptr);
+            view.Context->VSSetShader(view.Vs.Get(), nullptr, 0);
+            view.Context->PSSetShader(view.Ps.Get(), nullptr, 0);
+            view.Context->PSSetSamplers(0, 1, view.Sampler.GetAddressOf());
+            view.Context->PSSetShaderResources(0, 1, srv.GetAddressOf());
+            view.Context->Draw(3, 0);
+            ID3D11ShaderResourceView* none = nullptr;
+            view.Context->PSSetShaderResources(0, 1, &none);
+
+            // Im Takt des Monitors ausgeben: gleichmäßig, kein Tearing, kein Bilderstau
+            hr = view.SwapChain->Present(1, 0);
+            if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET)
+            {
+                Log(L"Grafikgerät verloren (0x%08X)", hr);
+                m_ExitCode = 4;
+                PostThreadMessageW(m_MainThread, WM_QUIT, 4, 0);
+                return;
+            }
+            view.Frames++;
+            m_StatFrames++;
         }
     }
 
@@ -734,6 +830,7 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
         std::lock_guard<std::mutex> ctx(m_ContextLock);
         for (auto& view : m_Views)
         {
+            if (view->UsesDda) continue; // zeichnet sich in seinem eigenen Thread
             if (!view->Dirty.exchange(false)) continue;
             std::lock_guard<std::mutex> lock(view->Lock);
             if (!view->Srv) continue;
@@ -761,6 +858,7 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
             QueryPerformanceFrequency(&f);
             m_StatRenderMs += (t1.QuadPart - t0.QuadPart) * 1000.0 / f.QuadPart;
             m_StatPresents++;
+            view->Frames++;
             if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET)
             {
                 Log(L"Grafikgerät verloren (0x%08X)", hr);
@@ -830,7 +928,15 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
         double secs = (now - m_StatsStart) / 1000.0;
         unsigned frames = m_StatFrames.exchange(0);
         unsigned maxGap = 0;
-        for (auto& v : m_Views) maxGap = std::max(maxGap, v->MaxGapMs.exchange(0));
+        std::wstring perView;
+        for (auto& v : m_Views)
+        {
+            maxGap = std::max(maxGap, v->MaxGapMs.exchange(0));
+            wchar_t buf[64];
+            swprintf_s(buf, L" %s%.0f", v->UsesDda ? L"D" : L"W", v->Frames.exchange(0) / secs);
+            perView += buf;
+        }
+        Log(L"Bilder/s je Bereich (D = Desktop Duplication, W = WGC):%s", perView.c_str());
         Log(L"Leistung: %.1f Aufnahmen/s, %.1f Bilder/s, längste Pause %u ms, Present Ø %.2f ms, Maus-Brücke %s",
             frames / secs, m_StatPresents / secs, maxGap, m_StatPresents ? m_StatRenderMs / m_StatPresents : 0.0,
             m_UseRawInput ? L"Raw Input" : L"leicht");
@@ -1155,6 +1261,7 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
             view->StopDup = true;
             if (view->DupThread.joinable()) view->DupThread.join();
             view->Dup.Reset();
+            if (view->FrameLatency) { CloseHandle(view->FrameLatency); view->FrameLatency = nullptr; }
             if (view->Pool) view->Pool.FrameArrived(view->FrameToken);
             if (view->Session) view->Session.Close();
             if (view->Pool) view->Pool.Close();
@@ -1260,6 +1367,13 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
         for (auto& v : m_Views)
             if (!InitView(*v, interop.get())) return 2;
         if (!InitWindows(instance)) return 2;
+        m_MainThread = GetCurrentThreadId();
+        for (auto& v : m_Views)
+        {
+            if (!v->UsesDda) continue;
+            View* raw = v.get();
+            v->DupThread = std::thread([this, raw] { DdaLoop(*raw); });
+        }
 
         // Liegen die virtuellen Monitore wie die Bereiche (gespiegelt), wechselt die Maus zwischen ihnen natürlich.
         for (auto& v : m_Views)
@@ -1317,7 +1431,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 
     std::wstring configPath = argv[1];
     std::wstring logPath = configPath + L".log";
-    _wfopen_s(&g_log, logPath.c_str(), L"w, ccs=UTF-8");
+    g_log = _wfsopen(logPath.c_str(), L"w, ccs=UTF-8", _SH_DENYNO); // andere Programme dürfen mitlesen
 
     Config cfg;
     std::wstring error;
