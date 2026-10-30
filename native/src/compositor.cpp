@@ -400,7 +400,7 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
         std::vector<HMONITOR> m_WorkFixed;
         void UpdateTaskbars();
         void FitDirectWindows();
-        struct FitState { ULONGLONG First = 0; int Count = 0; };
+        struct FitState { ULONGLONG First = 0; int Count = 0; bool GaveUp = false; };
         std::map<HWND, FitState> m_FitTries;
         void RestoreTaskbars();
         int m_WorkAreaResets = 0;
@@ -979,7 +979,13 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
             // Vollbild: deckt (fast) den ganzen Monitor ab
             bool fullscreen = frame.left <= c.Mon.left + 1 && frame.top <= c.Mon.top + 1 &&
                               frame.right >= c.Mon.right - 1 && frame.bottom >= c.Mon.bottom - 49;
-            if (!zoomed && !fullscreen) return TRUE;
+            if (!zoomed && !fullscreen)
+            {
+                // Fenster hat Vollbild/Maximiert verlassen -> beim nächsten Mal wieder versuchen
+                auto it = c.Self->m_FitTries.find(hwnd);
+                if (it != c.Self->m_FitTries.end()) c.Self->m_FitTries.erase(it);
+                return TRUE;
+            }
             // Mittelpunkt muss im Direktbereich liegen bzw. das Fenster den ganzen Monitor belegen
             if (!fullscreen)
             {
@@ -992,9 +998,17 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
                 std::abs(frame.right - c.Target.right) <= 2 && std::abs(frame.bottom - c.Target.bottom) <= 2) return TRUE;
 
             // Nicht gegen Programme ankämpfen, die sich immer wieder selbst vergrößern
+            // Manche Programme (z. B. Chrome im Vollbild) erzwingen die volle Monitorgröße. Dann einmal aufgeben,
+            // bis das Fenster das Vollbild verlässt – sonst flackert es.
             auto& t = c.Self->m_FitTries[hwnd];
-            if (c.Now - t.First > 15000) { t.First = c.Now; t.Count = 0; }
-            if (++t.Count > 4) return TRUE;
+            if (t.GaveUp) return TRUE;
+            if (t.First == 0) t.First = c.Now;
+            if (++t.Count > 3)
+            {
+                t.GaveUp = true;
+                Log(L"Fenster \"%s\" lässt sich nicht verkleinern (erzwingt volle Monitorgröße)", cls);
+                return TRUE;
+            }
 
             // Unsichtbaren Rahmen (DWM) mit einrechnen, damit der sichtbare Teil genau passt
             RECT r{ c.Target.left - (frame.left - wr.left), c.Target.top - (frame.top - wr.top),
