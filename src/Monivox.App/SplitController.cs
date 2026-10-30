@@ -133,11 +133,15 @@ public sealed class SplitController : IDisposable
             ShowFrames: Settings.ShowFrames);
 
         var session = new SplitSession(options, AddLog);
-        session.Ready += regions => _ui.BeginInvoke(() =>
+        bool firstReady = true;
+        session.Ready += (regions, physical) => _ui.BeginInvoke(() =>
         {
             _lastRegions = regions;
             SetState(SplitState.Running);
-            _rules.Apply(profile.Apps, regions);
+            // Beim Start: alle Fenster ohne Zuweisung vom aufgeteilten Monitor auf den Hauptmonitor holen
+            var gather = firstReady && Settings.GatherWindows ? regions.Append(physical).ToList() : null;
+            firstReady = false;
+            _rules.Apply(profile.Apps, regions, gather);
             Notify?.Invoke($"„{profile.Name}“ aktiv – {regions.Count} Bildschirme", false);
         });
 

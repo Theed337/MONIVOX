@@ -210,7 +210,7 @@ public class ConfigFormatTests
         Assert.Equal(2, res.Count);
         Assert.Contains(res, r => r.Element("width")!.Value == "1920" && r.Element("height")!.Value == "2160");
         Assert.Contains(doc.Root!.Element("global")!.Elements("g_refresh_rate"), e => e.Value == "144");
-        Assert.Equal("true", doc.Root!.Element("options")!.Element("HardwareCursor")!.Value);
+        Assert.Equal("false", doc.Root!.Element("options")!.Element("HardwareCursor")!.Value);
 
         Assert.False(VddSettings.Apply(doc, 2, [new DisplayMode(1920, 2160, 144)]));
     }

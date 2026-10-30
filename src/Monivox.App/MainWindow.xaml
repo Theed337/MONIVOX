@@ -151,6 +151,7 @@
                             <CheckBox x:Name="AutostartBox" Content="Mit Windows starten (im Infobereich unten rechts)" Click="Settings_Changed"/>
                             <CheckBox x:Name="SplitOnStartBox" Content="Beim Start sofort das letzte Profil aktivieren (Bildschirme entstehen automatisch)" Click="Settings_Changed"/>
                             <CheckBox x:Name="AutoUpdateBox" Content="Updates automatisch installieren" Click="Settings_Changed"/>
+                            <CheckBox x:Name="GatherBox" Content="Beim Teilen alle Fenster ohne Zuweisung auf den Hauptmonitor holen" Click="Settings_Changed"/>
                             <CheckBox x:Name="FramesBox" Content="Farbige Rahmen um die Bereiche anzeigen (auch per Tray oder Strg + Alt + Shift + F)" Click="Frames_Click"/>
                         </StackPanel>
                     </Border>

@@ -35,6 +35,8 @@ Legende: ✅ erledigt · 🔨 Code fertig, CI grün, auf Hardware ungetestet · 
 - 🔨 Erster Start: wartet, bis Windows neue Monitore meldet (vorher musste man 2× auf „Teilen“ drücken)
 - 🔨 Ruckeln: Maus-Brücke nur bei Bedarf, kein Dauer-Neusetzen des Arbeitsbereichs, Compositor auf der GPU des Monitors, Leistungsmessung im Protokoll
 - 🔨 **Ruckeln auf allen Monitoren: Ursache gefunden** – Fehler im Virtual Display Driver bei mehreren Monitoren an einem Gerät (upstream Issue #140). Lösung: ein Treibergerät pro virtuellem Monitor; ohne Aufteilung werden alle Geräte deaktiviert (keine Last)
+- 🔨 Virtuelle Bereiche flüssig: Aufnahme per Desktop Duplication (Fallback Windows.Graphics.Capture), Software-Mauszeiger im Treiber
+- 🔨 Beim Teilen: Fenster ohne Zuweisung springen auf den Hauptmonitor (abschaltbar)
 - ⬜ Mehrere Monitore gleichzeitig aufteilen
 - ⬜ `MinUpdateInterval` (Windows 11 24H2) für > 60 fps in virtuellen Bereichen
 - ⬜ Spieletests (DX11/DX12/Vulkan, Borderless/Exklusiv), Ergebnisliste

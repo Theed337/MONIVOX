@@ -36,7 +36,8 @@ public sealed class SplitSession(SplitOptions options, Action<string> log)
     /// Wird ausgelöst, sobald die virtuellen Monitore angeordnet sind (auch nach jedem Neuaufbau).
     /// Liefert pro Layout-Bereich die Desktop-Koordinaten des zugehörigen virtuellen Monitors.
     /// </summary>
-    public event Action<IReadOnlyList<PixelRect>>? Ready;
+    /// <remarks>Zweiter Wert: aktuelle Desktop-Position des aufgeteilten (physischen) Monitors.</remarks>
+    public event Action<IReadOnlyList<PixelRect>, PixelRect>? Ready;
     public static string RestorePath => Path.Combine(RuntimeDirectory, "restore.json");
 
     /// <summary>Wählt den aufzuteilenden Monitor. Bei mehreren echten Monitoren muss er angegeben werden.</summary>
@@ -198,7 +199,7 @@ public sealed class SplitSession(SplitOptions options, Action<string> log)
         var physicalNow = after.First(d => d.DeviceName == restore.PhysicalDevice).Bounds;
         Ready?.Invoke(specs.Select(s => layout.HasDirect && s.Index == layout.DirectIndex
             ? s.Dest.Offset(physicalNow.X, physicalNow.Y)
-            : after.First(d => d.DeviceName == deviceOf[s.Index]).Bounds).ToList());
+            : after.First(d => d.DeviceName == deviceOf[s.Index]).Bounds).ToList(), physicalNow);
     }
 
     /// <summary>Wartet, bis Windows die neue Anordnung wirklich übernommen hat (sonst findet der Compositor die Monitore nicht).</summary>

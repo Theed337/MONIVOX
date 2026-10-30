@@ -20,7 +20,7 @@ public static class VddSettings
             new XElement("gpu", new XElement("friendlyname", "default")),
             new XElement("global", new XElement("g_refresh_rate", 60)),
             new XElement("resolutions"),
-            new XElement("options", new XElement("HardwareCursor", "true"))));
+            new XElement("options", new XElement("HardwareCursor", "false"))));
 
     /// <summary>
     /// Setzt die Monitoranzahl und stellt sicher, dass jeder benötigte Modus angeboten wird.
@@ -40,6 +40,16 @@ public static class VddSettings
         if (count.Value != monitorCount.ToString(CultureInfo.InvariantCulture))
         {
             count.Value = monitorCount.ToString(CultureInfo.InvariantCulture);
+            changed = true;
+        }
+
+        // Software-Mauszeiger: Windows zeichnet den Zeiger dann ins Bild des virtuellen Monitors. Mit Hardware-Zeiger
+        // fehlt er in der Aufnahme bzw. wird nur bei Bildänderungen aktualisiert (wirkt wie 10 fps).
+        var options = GetOrAdd(root, "options");
+        var cursor = GetOrAdd(options, "HardwareCursor");
+        if (!string.Equals(cursor.Value.Trim(), "false", StringComparison.OrdinalIgnoreCase))
+        {
+            cursor.Value = "false";
             changed = true;
         }
 

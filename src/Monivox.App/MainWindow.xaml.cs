@@ -57,6 +57,7 @@ public partial class MainWindow : Window
         SplitOnStartBox.IsChecked = controller.Settings.SplitOnStartup;
         AutoUpdateBox.IsChecked = controller.Settings.AutoUpdate;
         FramesBox.IsChecked = controller.Settings.ShowFrames;
+        GatherBox.IsChecked = controller.Settings.GatherWindows;
         controller.StateChanged += () => Dispatcher.BeginInvoke(() => FramesBox.IsChecked = _controller.Settings.ShowFrames);
 
         RefreshDriver();
@@ -522,6 +523,7 @@ public partial class MainWindow : Window
             StartWithWindows = AutostartBox.IsChecked == true,
             SplitOnStartup = SplitOnStartBox.IsChecked == true,
             AutoUpdate = AutoUpdateBox.IsChecked == true,
+            GatherWindows = GatherBox.IsChecked == true,
         });
     }
 

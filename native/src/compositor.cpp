@@ -24,7 +24,7 @@
 #include <windows.h>
 #include <shellapi.h>
 #include <d3d11_4.h>
-#include <dxgi1_3.h>
+#include <dxgi1_6.h>
 #include <d3dcompiler.h>
 #include <wrl/client.h>
 
@@ -46,6 +46,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 using Microsoft::WRL::ComPtr;
@@ -278,11 +279,20 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
         winrt::event_token FrameToken{};
         winrt::Windows::Graphics::SizeInt32 PoolSize{};
 
+        // Desktop Duplication (bevorzugt): liefert jedes Bild, das Windows für den Monitor zusammensetzt
+        ComPtr<IDXGIOutput1> DupOutput;
+        ComPtr<IDXGIOutputDuplication> Dup;
+        std::thread DupThread;
+        std::atomic<bool> StopDup{ false };
+        bool UsesDda = false;
+
         std::mutex Lock;
         ComPtr<ID3D11Texture2D> Texture;
         ComPtr<ID3D11ShaderResourceView> Srv;
         UINT TexWidth = 0, TexHeight = 0;
         std::atomic<bool> Dirty{ false };
+        ULONGLONG LastFrameMs = 0;
+        std::atomic<unsigned> MaxGapMs{ 0 };
     };
 
     enum class AreaKind { Other, Virtual, Direct, Covered };
@@ -305,6 +315,9 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
         bool InitWindows(HINSTANCE instance);
         bool InitView(View& view, IGraphicsCaptureItemInterop* interop);
         void OnFrame(View& view, wgc::Direct3D11CaptureFramePool const& pool);
+        bool StartDda(View& view);
+        void DdaLoop(View& view);
+        void StoreFrame(View& view, ID3D11Texture2D* src, UINT w, UINT h);
         void RenderDirty();
         void Shutdown();
 
@@ -542,6 +555,13 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
             Log(L"Quellmonitor %s nach 10 s nicht gefunden", view.Cfg.Device.c_str());
             return false;
         }
+        if (StartDda(view))
+        {
+            Log(L"%s: Aufnahme per Desktop Duplication", view.Cfg.Device.c_str());
+            return true;
+        }
+        Log(L"%s: Desktop Duplication nicht möglich – nutze Windows.Graphics.Capture", view.Cfg.Device.c_str());
+
         HRESULT hr = interop->CreateForMonitor(view.Source.Handle, winrt::guid_of<wgc::GraphicsCaptureItem>(), winrt::put_abi(view.Item));
         if (FAILED(hr)) { Log(L"CreateForMonitor: 0x%08X", hr); return false; }
 
@@ -564,11 +584,20 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
         auto access = frame.Surface().as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
         ComPtr<ID3D11Texture2D> src;
         if (FAILED(access->GetInterface(IID_PPV_ARGS(&src)))) return;
+        StoreFrame(view, src.Get(), static_cast<UINT>(size.Width), static_cast<UINT>(size.Height));
+        if (size.Width != view.PoolSize.Width || size.Height != view.PoolSize.Height)
+        {
+            view.PoolSize = size;
+            pool.Recreate(m_WinrtDevice, wgd::DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, size);
+        }
+    }
 
+    void Compositor::StoreFrame(View& view, ID3D11Texture2D* src, UINT width, UINT height)
+    {
         D3D11_TEXTURE2D_DESC sd{};
         src->GetDesc(&sd);
-        UINT w = std::min<UINT>(static_cast<UINT>(size.Width), sd.Width);
-        UINT h = std::min<UINT>(static_cast<UINT>(size.Height), sd.Height);
+        UINT w = std::min<UINT>(width, sd.Width);
+        UINT h = std::min<UINT>(height, sd.Height);
         if (w == 0 || h == 0) return;
         {
             // Reihenfolge immer: Context-Lock, dann View-Lock (wie beim Zeichnen)
@@ -592,16 +621,112 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
                 view.TexHeight = h;
             }
             D3D11_BOX box{ 0, 0, 0, w, h, 1 };
-            m_Context->CopySubresourceRegion(view.Texture.Get(), 0, 0, 0, 0, src.Get(), 0, &box);
+            m_Context->CopySubresourceRegion(view.Texture.Get(), 0, 0, 0, 0, src, 0, &box);
         }
-        if (size.Width != view.PoolSize.Width || size.Height != view.PoolSize.Height)
+        ULONGLONG now = GetTickCount64();
+        if (view.LastFrameMs != 0)
         {
-            view.PoolSize = size;
-            pool.Recreate(m_WinrtDevice, wgd::DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, size);
+            unsigned gap = static_cast<unsigned>(now - view.LastFrameMs);
+            unsigned prev = view.MaxGapMs.load();
+            while (gap > prev && !view.MaxGapMs.compare_exchange_weak(prev, gap)) {}
         }
+        view.LastFrameMs = now;
         view.Dirty = true;
         m_StatFrames++;
         SetEvent(m_FrameEvent);
+    }
+
+    // ------------------------------------------------------------------- Desktop Duplication
+
+    bool Compositor::StartDda(View& view)
+    {
+        ComPtr<IDXGIDevice> dxgiDevice;
+        m_Device.As(&dxgiDevice);
+        ComPtr<IDXGIAdapter> adapter;
+        dxgiDevice->GetAdapter(&adapter);
+
+        // Ausgang des virtuellen Monitors auf derselben Grafikkarte suchen
+        ComPtr<IDXGIOutput> output;
+        for (UINT o = 0; adapter->EnumOutputs(o, &output) != DXGI_ERROR_NOT_FOUND; ++o)
+        {
+            DXGI_OUTPUT_DESC od{};
+            if (SUCCEEDED(output->GetDesc(&od)) && _wcsicmp(od.DeviceName, view.Cfg.Device.c_str()) == 0) break;
+            output.Reset();
+        }
+        if (!output) return false;
+        if (FAILED(output.As(&view.DupOutput))) return false;
+
+        HRESULT hr = E_FAIL;
+        ComPtr<IDXGIOutput5> out5;
+        if (SUCCEEDED(view.DupOutput.As(&out5)))
+        {
+            const DXGI_FORMAT formats[] = { DXGI_FORMAT_B8G8R8A8_UNORM };
+            hr = out5->DuplicateOutput1(m_Device.Get(), 0, 1, formats, &view.Dup);
+        }
+        if (FAILED(hr)) hr = view.DupOutput->DuplicateOutput(m_Device.Get(), &view.Dup);
+        if (FAILED(hr))
+        {
+            Log(L"DuplicateOutput: 0x%08X", hr);
+            view.DupOutput.Reset();
+            return false;
+        }
+        view.UsesDda = true;
+        View* raw = &view;
+        view.DupThread = std::thread([this, raw] { DdaLoop(*raw); });
+        return true;
+    }
+
+    void Compositor::DdaLoop(View& view)
+    {
+        // Höhere Priorität, damit Bilder auch unter Last pünktlich abgeholt werden
+        SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+        while (!view.StopDup)
+        {
+            if (!view.Dup)
+            {
+                // Zugriff verloren (z. B. Moduswechsel, UAC-Dialog) – neu verbinden
+                Sleep(100);
+                ComPtr<IDXGIOutput5> out5;
+                HRESULT hr = E_FAIL;
+                if (SUCCEEDED(view.DupOutput.As(&out5)))
+                {
+                    const DXGI_FORMAT formats[] = { DXGI_FORMAT_B8G8R8A8_UNORM };
+                    hr = out5->DuplicateOutput1(m_Device.Get(), 0, 1, formats, &view.Dup);
+                }
+                if (FAILED(hr)) view.DupOutput->DuplicateOutput(m_Device.Get(), &view.Dup);
+                continue;
+            }
+
+            DXGI_OUTDUPL_FRAME_INFO info{};
+            ComPtr<IDXGIResource> resource;
+            HRESULT hr = view.Dup->AcquireNextFrame(100, &info, &resource);
+            if (hr == DXGI_ERROR_WAIT_TIMEOUT) continue;
+            if (hr == DXGI_ERROR_ACCESS_LOST || hr == DXGI_ERROR_INVALID_CALL)
+            {
+                view.Dup.Reset();
+                continue;
+            }
+            if (FAILED(hr))
+            {
+                Log(L"AcquireNextFrame: 0x%08X", hr);
+                view.Dup.Reset();
+                Sleep(200);
+                continue;
+            }
+            // Nur neue Bildinhalte kopieren (reine Mauszeiger-Updates ohne Bild überspringen)
+            if (info.LastPresentTime.QuadPart != 0 || info.AccumulatedFrames > 0)
+            {
+                ComPtr<ID3D11Texture2D> tex;
+                if (SUCCEEDED(resource.As(&tex)))
+                {
+                    D3D11_TEXTURE2D_DESC d{};
+                    tex->GetDesc(&d);
+                    StoreFrame(view, tex.Get(), d.Width, d.Height);
+                }
+            }
+            resource.Reset();
+            view.Dup->ReleaseFrame();
+        }
     }
 
     void Compositor::RenderDirty()
@@ -704,8 +829,10 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
         if (now - m_StatsStart < 10000) return;
         double secs = (now - m_StatsStart) / 1000.0;
         unsigned frames = m_StatFrames.exchange(0);
-        Log(L"Leistung: %.1f Aufnahmen/s, %.1f Bilder/s, Present Ø %.2f ms, Maus-Brücke %s",
-            frames / secs, m_StatPresents / secs, m_StatPresents ? m_StatRenderMs / m_StatPresents : 0.0,
+        unsigned maxGap = 0;
+        for (auto& v : m_Views) maxGap = std::max(maxGap, v->MaxGapMs.exchange(0));
+        Log(L"Leistung: %.1f Aufnahmen/s, %.1f Bilder/s, längste Pause %u ms, Present Ø %.2f ms, Maus-Brücke %s",
+            frames / secs, m_StatPresents / secs, maxGap, m_StatPresents ? m_StatRenderMs / m_StatPresents : 0.0,
             m_UseRawInput ? L"Raw Input" : L"leicht");
         m_StatsStart = now;
         m_StatPresents = 0;
@@ -1025,6 +1152,9 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
     {
         for (auto& view : m_Views)
         {
+            view->StopDup = true;
+            if (view->DupThread.joinable()) view->DupThread.join();
+            view->Dup.Reset();
             if (view->Pool) view->Pool.FrameArrived(view->FrameToken);
             if (view->Session) view->Session.Close();
             if (view->Pool) view->Pool.Close();

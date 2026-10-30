@@ -40,16 +40,133 @@ public sealed class WindowRules : IDisposable
     }
 
     /// <summary>Neue Regeln/Bereiche übernehmen und bereits offene Fenster einsortieren.</summary>
-    public void Apply(IReadOnlyList<AppAssignment> rules, IReadOnlyList<PixelRect> regions)
+    /// <param name="gatherFrom">Bereiche (Desktop-Koordinaten), aus denen nicht zugewiesene Fenster auf den
+    /// Hauptmonitor geholt werden – z. B. die virtuellen Monitore und der aufgeteilte Monitor. Leer = nichts holen.</param>
+    public void Apply(IReadOnlyList<AppAssignment> rules, IReadOnlyList<PixelRect> regions, IReadOnlyList<PixelRect>? gatherFrom = null)
     {
         _rules = rules;
         _regions = regions;
         _placed.Clear();
+
+        if (gatherFrom is { Count: > 0 }) GatherUnassigned(gatherFrom);
         if (rules.Count == 0 || regions.Count == 0) return;
 
         EnumWindows((hwnd, _) => { TryPlace(hwnd); return true; }, IntPtr.Zero);
         StartMissingApps();
     }
+
+    /// <summary>
+    /// Holt alle sichtbaren Fenster ohne Zuweisung, die auf einem der angegebenen Bereiche liegen, auf den
+    /// Hauptmonitor (von dort kann man sie bequem weiterschieben). Größe bleibt erhalten, soweit sie passt;
+    /// maximierte Fenster werden auf dem Hauptmonitor wieder maximiert.
+    /// </summary>
+    public void GatherUnassigned(IReadOnlyList<PixelRect> fromAreas)
+    {
+        var target = FindMainMonitorWorkArea(fromAreas);
+        if (target is not { } work)
+        {
+            _log("Kein anderer Monitor vorhanden – Fenster bleiben, wo sie sind.");
+            return;
+        }
+
+        int moved = 0;
+        EnumWindows((hwnd, _) =>
+        {
+            if (!IsGatherCandidate(hwnd)) return true;
+            if (!GetWindowRect(hwnd, out var r)) return true;
+            int cx = (r.Left + r.Right) / 2, cy = (r.Top + r.Bottom) / 2;
+            if (!fromAreas.Any(a => cx >= a.X && cx < a.Right && cy >= a.Y && cy < a.Bottom)) return true;
+
+            GetWindowThreadProcessId(hwnd, out uint pid);
+            string? path = ProcessPath(pid);
+            string title = WindowTitle(hwnd);
+            if (path is not null && _rules.Any(rule => Matches(rule, path, title))) return true; // hat eigene Zuweisung
+
+            MoveToArea(hwnd, work, moved);
+            moved++;
+            return true;
+        }, IntPtr.Zero);
+
+        if (moved > 0) _log($"{moved} Fenster ohne Zuweisung auf den Hauptmonitor geholt.");
+    }
+
+    private static bool IsGatherCandidate(IntPtr hwnd)
+    {
+        if (!IsWindowVisible(hwnd) || GetAncestor(hwnd, GA_ROOT) != hwnd) return false;
+        if (GetWindow(hwnd, GW_OWNER) != IntPtr.Zero) return false;
+        long exStyle = GetWindowLongPtr(hwnd, GWL_EXSTYLE).ToInt64();
+        if ((exStyle & WS_EX_TOOLWINDOW) != 0) return false;
+        // Unsichtbar gehaltene Fenster (z. B. ausgesetzte Store-Apps) nicht anfassen
+        if (DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, out int cloaked, sizeof(int)) == 0 && cloaked != 0) return false;
+        if (WindowTitle(hwnd).Length == 0) return false;
+        var cls = new StringBuilder(64);
+        GetClassName(hwnd, cls, cls.Capacity);
+        string c = cls.ToString();
+        return c is not ("Progman" or "WorkerW" or "Shell_TrayWnd" or "Shell_SecondaryTrayWnd" or "MonivoxView" or "MonivoxBackdrop");
+    }
+
+    private static void MoveToArea(IntPtr hwnd, PixelRect work, int index)
+    {
+        var wp = new WINDOWPLACEMENT { length = Marshal.SizeOf<WINDOWPLACEMENT>() };
+        if (!GetWindowPlacement(hwnd, ref wp)) return;
+        bool maximized = wp.showCmd == SW_SHOWMAXIMIZED;
+        bool minimized = wp.showCmd == SW_SHOWMINIMIZED;
+
+        // Normale Größe beibehalten, aber auf den Hauptmonitor begrenzen; leicht versetzt (Kaskade)
+        int w = Math.Min(wp.rcNormalPosition.Right - wp.rcNormalPosition.Left, work.Width);
+        int h = Math.Min(wp.rcNormalPosition.Bottom - wp.rcNormalPosition.Top, work.Height);
+        int step = (index % 10) * 32;
+        int x = work.X + Math.Min(step + 40, Math.Max(0, work.Width - w));
+        int y = work.Y + Math.Min(step + 40, Math.Max(0, work.Height - h));
+
+        if (maximized || minimized)
+        {
+            // rcNormalPosition ist in Arbeitsbereich-Koordinaten des primären Monitors angegeben
+            var off = PrimaryWorkAreaOffset();
+            wp.rcNormalPosition = new RECT { Left = x - off.X, Top = y - off.Y, Right = x - off.X + w, Bottom = y - off.Y + h };
+            if (minimized) wp.flags = 0;
+            SetWindowPlacement(hwnd, ref wp);
+            if (maximized)
+            {
+                // Maximieren erfolgt auf dem Monitor, auf dem die normale Position liegt
+                ShowWindow(hwnd, SW_RESTORE);
+                SetWindowPos(hwnd, IntPtr.Zero, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
+                ShowWindow(hwnd, SW_MAXIMIZE);
+            }
+        }
+        else
+        {
+            SetWindowPos(hwnd, IntPtr.Zero, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+    }
+
+    /// <summary>Arbeitsbereich des Hauptmonitors: primärer Monitor, sonst erster Monitor außerhalb der aufgeteilten Bereiche.</summary>
+    private static PixelRect? FindMainMonitorWorkArea(IReadOnlyList<PixelRect> splitAreas)
+    {
+        var monitors = new List<(PixelRect Rect, PixelRect Work, bool Primary)>();
+        EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, (IntPtr mon, IntPtr hdc, ref RECT rc, IntPtr data) =>
+        {
+            var mi = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+            if (GetMonitorInfo(mon, ref mi))
+                monitors.Add((ToPixel(mi.rcMonitor), ToPixel(mi.rcWork), (mi.dwFlags & MONITORINFOF_PRIMARY) != 0));
+            return true;
+        }, IntPtr.Zero);
+
+        bool IsSplit(PixelRect r) => splitAreas.Any(a => r.X < a.Right && a.X < r.Right && r.Y < a.Bottom && a.Y < r.Bottom);
+        var candidates = monitors.Where(m => !IsSplit(m.Rect)).ToList();
+        if (candidates.Count == 0) return null;
+        return (candidates.FirstOrDefault(m => m.Primary) is { Rect.Width: > 0 } p ? p : candidates[0]).Work;
+    }
+
+    private static (int X, int Y) PrimaryWorkAreaOffset()
+    {
+        var mi = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+        var primary = MonitorFromPoint(new POINT(), MONITOR_DEFAULTTOPRIMARY);
+        if (!GetMonitorInfo(primary, ref mi)) return (0, 0);
+        return (mi.rcWork.Left - mi.rcMonitor.Left, mi.rcWork.Top - mi.rcMonitor.Top);
+    }
+
+    private static PixelRect ToPixel(RECT r) => new(r.Left, r.Top, r.Right - r.Left, r.Bottom - r.Top);
 
     public void Clear()
     {
@@ -189,6 +306,26 @@ public sealed class WindowRules : IDisposable
     }
 
     // ---- Win32 ----
+    [StructLayout(LayoutKind.Sequential)] private struct RECT { public int Left, Top, Right, Bottom; }
+    [StructLayout(LayoutKind.Sequential)] private struct POINT { public int X, Y; }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct WINDOWPLACEMENT { public int length; public int flags; public int showCmd; public POINT ptMinPosition; public POINT ptMaxPosition; public RECT rcNormalPosition; }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MONITORINFO { public int cbSize; public RECT rcMonitor; public RECT rcWork; public uint dwFlags; }
+    private delegate bool MonitorEnumProc(IntPtr monitor, IntPtr hdc, ref RECT rect, IntPtr data);
+
+    private const int SW_SHOWMINIMIZED = 2, SW_SHOWMAXIMIZED = 3;
+    private const uint MONITORINFOF_PRIMARY = 1, MONITOR_DEFAULTTOPRIMARY = 1;
+    private const int DWMWA_CLOAKED = 14;
+
+    [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
+    [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool GetWindowPlacement(IntPtr hwnd, ref WINDOWPLACEMENT wp);
+    [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool SetWindowPlacement(IntPtr hwnd, ref WINDOWPLACEMENT wp);
+    [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool EnumDisplayMonitors(IntPtr hdc, IntPtr clip, MonitorEnumProc proc, IntPtr data);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "GetMonitorInfoW")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool GetMonitorInfo(IntPtr monitor, ref MONITORINFO info);
+    [DllImport("user32.dll")] private static extern IntPtr MonitorFromPoint(POINT pt, uint flags);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetClassName(IntPtr hwnd, StringBuilder name, int max);
+    [DllImport("dwmapi.dll")] private static extern int DwmGetWindowAttribute(IntPtr hwnd, int attr, out int value, int size);
     private delegate void WinEventDelegate(IntPtr hWinEventHook, uint eventType, IntPtr hwnd, int idObject, int idChild, uint dwEventThread, uint dwmsEventTime);
     private delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lParam);
 

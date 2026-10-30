@@ -71,6 +71,8 @@ public sealed record SettingsDocument
     public bool SplitOnStartup { get; init; } = true;
     /// <summary>Updates automatisch laden und installieren.</summary>
     public bool AutoUpdate { get; init; } = true;
+    /// <summary>Beim Start der Aufteilung Fenster ohne Zuweisung auf den Hauptmonitor holen.</summary>
+    public bool GatherWindows { get; init; } = true;
     /// <summary>Farbige Rahmen um die Bereiche anzeigen.</summary>
     public bool ShowFrames { get; init; }
 }
