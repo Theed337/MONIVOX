@@ -15,6 +15,8 @@ public partial class App : Application
 {
     private const string MutexName = "Global\\MONIVOX-SingleInstance";
     private const string ShowEventName = "Global\\MONIVOX-Show";
+    private const string ExitEventName = "Global\\MONIVOX-Exit";
+    private EventWaitHandle? _exitEvent;
 
     private Mutex? _mutex;
     private EventWaitHandle? _showEvent;
@@ -29,19 +31,30 @@ public partial class App : Application
         base.OnStartup(e);
         bool startHidden = e.Args.Contains("--tray");
 
-        // Nur eine Instanz. Ein zweiter Start holt das Fenster der laufenden Instanz nach vorn.
+        // Nur eine Instanz. Wird MONIVOX erneut gestartet, übernimmt die NEUE Instanz: die alte beendet sich sauber
+        // (Aufteilung stoppen, Anzeige wiederherstellen). So läuft nach einem Update nie versehentlich die alte Version weiter.
         _mutex = new Mutex(true, MutexName, out bool first);
-        if (!first && e.Args.Contains("--restarted"))
+        if (!first)
         {
-            // Nach einem Update: kurz warten, bis die alte Instanz beendet ist
-            try { first = _mutex.WaitOne(TimeSpan.FromSeconds(15)); } catch (AbandonedMutexException) { first = true; }
+            try { EventWaitHandle.OpenExisting(ExitEventName).Set(); }
+            catch (WaitHandleCannotBeOpenedException)
+            {
+                // Sehr alte Version ohne Beenden-Signal: nur nach vorne holen
+                try { EventWaitHandle.OpenExisting(ShowEventName).Set(); } catch (WaitHandleCannotBeOpenedException) { }
+            }
+            try { first = _mutex.WaitOne(TimeSpan.FromSeconds(20)); } catch (AbandonedMutexException) { first = true; }
         }
         if (!first)
         {
-            try { EventWaitHandle.OpenExisting(ShowEventName).Set(); } catch (WaitHandleCannotBeOpenedException) { }
             Shutdown();
             return;
         }
+        _exitEvent = new EventWaitHandle(false, EventResetMode.AutoReset, ExitEventName);
+        var exitThread = new Thread(() =>
+        {
+            if (_exitEvent.WaitOne()) Dispatcher.BeginInvoke(async () => await ExitAsync());
+        }) { IsBackground = true };
+        exitThread.Start();
         _showEvent = new EventWaitHandle(false, EventResetMode.AutoReset, ShowEventName);
         var showThread = new Thread(() =>
         {
