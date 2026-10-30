@@ -501,7 +501,6 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
         {
             m_Backdrop = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, L"MonivoxBackdrop", L"",
                                          WS_POPUP, px, py, W(m_Physical.Rect), H(m_Physical.Rect), nullptr, nullptr, instance, nullptr);
-            SetWindowDisplayAffinity(m_Backdrop, WDA_EXCLUDEFROMCAPTURE);
             ShowWindow(m_Backdrop, SW_SHOWNOACTIVATE);
         }
 
@@ -519,7 +518,8 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
                                          view->Screen.left, view->Screen.top, W(view->Screen), H(view->Screen),
                                          nullptr, nullptr, instance, nullptr);
             if (!view->Hwnd) return false;
-            SetWindowDisplayAffinity(view->Hwnd, WDA_EXCLUDEFROMCAPTURE);
+            // Bewusst NICHT von Aufnahmen ausgeschlossen: Screenshots/Streams des Monitors sollen die Bereiche zeigen.
+            // (Rückkopplung gibt es nicht, aufgenommen werden nur die virtuellen Monitore.)
 
             DXGI_SWAP_CHAIN_DESC1 desc{};
             desc.Width = W(view->Screen);
