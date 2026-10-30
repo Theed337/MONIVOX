@@ -31,9 +31,10 @@ jobs:
         run: |
           # Die WDK-INF-Prüfung lädt 'x86\InfVerif.dll' relativ zum Arbeitsverzeichnis. Auf den
           # GitHub-Runnern liegt die DLL im Tools-Ordner des WDK – msbuild daher von dort starten.
-          $dll = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\Tools" -Recurse -Filter InfVerif.dll -ErrorAction SilentlyContinue |
-                 Where-Object { $_.Directory.Name -eq 'x86' } | Sort-Object FullName -Descending | Select-Object -First 1
-          if (-not $dll) { Write-Output "::error::InfVerif.dll nicht gefunden"; exit 1 }
+          $all = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10" -Recurse -Include InfVerif.dll,InfVerif.exe -ErrorAction SilentlyContinue
+          $all | ForEach-Object { Write-Output "::warning::Gefunden: $($_.FullName)" }
+          $dll = $all | Where-Object { $_.Name -eq 'InfVerif.dll' -and $_.Directory.Name -eq 'x86' } | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $dll) { Write-Output "::error::x86\InfVerif.dll nicht gefunden"; exit 1 }
           Write-Output "InfVerif: $($dll.FullName)"
           $sln = Join-Path $PWD 'driver\MonivoxDriver.sln'
           $log = Join-Path $PWD 'msbuild.log'
