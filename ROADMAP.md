@@ -1,52 +1,44 @@
 # Roadmap & Fortschritt
 
-Legende: ✅ erledigt · 🔨 Code vorhanden, auf Hardware ungetestet · ⬜ offen
+Legende: ✅ erledigt · 🔨 Code fertig, CI grün, auf Hardware ungetestet · ⬜ offen
 
-## Phase 1 – Technische Machbarkeit ✅
-- ✅ Windows-Schnittstellen geprüft (Display Configuration API, IddCx, WGC) → [docs/MACHBARKEIT.md](docs/MACHBARKEIT.md)
-- ✅ Architektur festgelegt: IDD + Topologie-Steuerung + Compositor (ADR-001)
-- ✅ Treiberanforderungen geklärt: UMDF-Treiber braucht keine Testsignatur (Authenticode + vertrautes Zertifikat)
-- ✅ Gaming-Einschränkungen dokumentiert
+## Phase 1 – Machbarkeit ✅
+- ✅ Schnittstellen geprüft, Architektur: virtueller Anzeigetreiber + Anordnung + Compositor → [docs/MACHBARKEIT.md](docs/MACHBARKEIT.md)
+- ✅ Treiber: mitgelieferter, offiziell signierter Virtual Display Driver (kein Testmodus, keine eigene Signatur nötig)
 
-## Phase 2 – Technischer Prototyp 🔨
-- 🔨 IddCx-Treiber: N Monitore, Modi aus Registry, eindeutige EDIDs (`driver/`)
-- 🔨 Software-Gerät anlegen/entfernen (`MonivoxDevice.exe`)
-- 🔨 Compositor: D3D11 + Windows.Graphics.Capture, skalierter Blit pro Bereich, ClipCursor, Not-Aus
-- 🔨 Anordnung der virtuellen Monitore, physischer Monitor geparkt (`SplitSession`)
-- 🔨 `monivox list / preview / apply / stop / check / update`
-- 🔨 Nur der gewählte Monitor wird aufgeteilt, andere bleiben unverändert; Originalanordnung wird gesichert/wiederhergestellt
-- 🔨 Anti-Cheat-Check (Testsignatur, laufende Anti-Cheats)
-- 🔨 Auto-Update über GitHub Releases (CI veröffentlicht bei jedem Push auf main)
-- ✅ Kernlogik mit Unit-Tests (Layouts, Rundung, Anordnung, Konfigformate, Profile)
-- ⬜ **Nachweis auf echter Hardware** (Kriterien in MACHBARKEIT.md §7) – *nächster Schritt*
-- ⬜ Messwerte: Latenz, GPU-Last, CPU-Last eintragen
+## Phase 2 – Prototyp 🔨
+- 🔨 Treiber-Steuerung: Monitoranzahl/Auflösungen per vdd_settings.xml, Neuladen per Pipe, Fallback Geräteneustart
+- 🔨 Compositor: D3D11 + Windows.Graphics.Capture, Not-Aus, Maus bleibt aus dem verdeckten Bereich
+- 🔨 Nur der gewählte Monitor wird aufgeteilt; Originalanordnung wird gesichert und wiederhergestellt
+- 🔨 Kleine Bereiche (< 640×480) über hochskalierte virtuelle Monitore im gleichen Seitenverhältnis
+- ⬜ **Nachweis auf echter Hardware** – nächster Schritt
+- ⬜ Messwerte: Latenz, GPU-/CPU-Last
 
-## Phase 3 – Desktop-Anwendung ⬜
-- ⬜ WPF-App im Windows-11-Stil (Mica, hell/dunkel)
-- ⬜ Bildschirmübersicht + visueller Editor (Bereiche ziehen, Trennlinien verschieben, einrasten)
-- ⬜ Profilverwaltung (Datenmodell ✅ in Core)
-- ⬜ Programmzuweisung (Datenmodell ✅ in Core)
-- ⬜ Treiber- und Statusseite (Gerät, Zertifikat, Compositor-Status, Anti-Cheat-Hinweise)
+## Phase 3 – Oberfläche 🔨
+- 🔨 WPF-App im Windows-11-Stil (hell/dunkel), Infobereich mit Doppelklick/Rechtsklick-Menü
+- 🔨 Freier Editor (Aufziehen, Verschieben, Kanten, Einrasten, pixelgenaue Eingabe), Vorlagen optional
+- 🔨 Profile: anlegen, umbenennen, löschen, Export/Import, Wechsel aus dem Tray
+- 🔨 Status-Seite: Treiber installieren, Anti-Cheat-Check, Protokoll
+- 🔨 Autostart über geplante Aufgabe (keine UAC-Abfrage, auch im Akkubetrieb)
 
-## Phase 4 – Fensterverwaltung ⬜
-- ⬜ Dienst: neue Fenster per `SetWinEventHook(EVENT_OBJECT_SHOW)` erkennen
-- ⬜ Fenster auf zugewiesenen virtuellen Monitor verschieben, Zustand setzen
-- ⬜ Programme beim Profilladen starten, Positionen merken
-- ⬜ Hotkeys zum Profilwechsel, Tray-Icon, Autostart
+## Phase 4 – Fensterverwaltung 🔨
+- 🔨 Programme Bereichen zuweisen (Fenster wird beim Öffnen platziert: maximiert/Fenster/randlos/minimiert)
+- 🔨 Programme mit Profil starten (ohne Adminrechte über den Explorer)
+- ⬜ Tastenkombinationen zum Profilwechsel
 
-## Phase 5 – Gaming & Stabilität ⬜
-- ⬜ Bildübergabe direkt aus dem Treiber (Shared Texture) – behebt Exklusiv-Vollbild-Probleme, senkt Latenz
-- ⬜ `GraphicsCaptureSession.MinUpdateInterval` (Win11 24H2) für > 60 fps Aufnahme
-- ⬜ Tests mit Spielen (DX11/DX12/Vulkan, Borderless/Exklusiv), Ergebnisliste veröffentlichen
-- ⬜ Watchdog-Dienst, Wiederherstellung nach Absturz
-- ⬜ HDR (FP16) ab Windows 11
+## Phase 5 – Gaming, DRM & Stabilität ⬜
+- ⬜ **Direktbereich für DRM-Videos und null Latenz**: ein Bereich pro Monitor wird nicht virtualisiert, sondern zeigt
+  den echten Monitor (Netflix & Co. funktionieren dort, keine Zusatzlatenz). Braucht eine Maus-Übergabe zwischen
+  Direktbereich und virtuellen Bereichen.
+- ⬜ Mehrere Monitore gleichzeitig aufteilen
+- ⬜ `MinUpdateInterval` (Windows 11 24H2) für > 60 fps in virtuellen Bereichen
+- ⬜ Spieletests (DX11/DX12/Vulkan, Borderless/Exklusiv), Ergebnisliste
+- ⬜ Energiesparen/Standby, Monitor ab- und anstecken im laufenden Betrieb testen
 
 ## Phase 6 – Fertige Anwendung ⬜
-- ⬜ WiX-Installer inkl. Treiberinstallation/-deinstallation
-- ⬜ Einrichtungsassistent (PbP-Hinweis, Backend-Wahl)
-- ⬜ Signatur über SignPath Foundation (kostenlos, braucht öffentliches Repo) oder gekauftes Zertifikat statt Einweg-Zertifikat
+- ⬜ Installer (WiX) inkl. .NET-Laufzeit-Prüfung, Startmenü, Deinstallation (Treiber + Autostart entfernen)
+- ⬜ Einrichtungsassistent beim ersten Start
+- ⬜ Codesignatur für MONIVOX selbst (SignPath Foundation, braucht öffentliches Repo)
 
-## Bekannte offene Punkte
-- Treiber liest die Konfiguration nur beim Gerätestart → Layoutwechsel = kurzer Geräteneustart (~1–2 s)
-- Monitorzuordnung beim Fremdtreiber erfolgt nach Gerätenummer, nicht garantiert stabil
-- Positionierung nutzt `ChangeDisplaySettingsEx`; Umstieg auf `SetDisplayConfig` geplant (atomarer, Pfad-genau)
+## Hinweise
+- Auto-Update braucht öffentlich abrufbare Releases. Solange das Repository privat ist, meldet die App „kein öffentliches Release gefunden“.

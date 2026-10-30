@@ -71,31 +71,18 @@ unterstützt diesen Fall in der Programm-/Profilverwaltung genauso (Phase 3/4), 
 keinen virtuellen Treiber. **Wenn der eigene Monitor PbP kann, ist das für Spiele immer die
 bessere Wahl.** Das wird in der App ehrlich so angezeigt.
 
-## 3. Treiberanforderungen
+## 3. Treiber (Entscheidung vom 30.10.2026)
 
-- **Framework:** IddCx (Indirect Display Driver Class eXtension), UMDF 2. Verfügbar ab Windows 10 1607,
-  wir zielen auf IddCx 1.4 (Windows 10 1903+), damit Win10 und Win11 abgedeckt sind.
-- **Gerät:** Software-Gerät (kein USB/PCI). Wird über `SwDeviceCreate` bzw. Root-Enumeration angelegt.
-- **Konfiguration:** Anzahl und Modi der virtuellen Monitore liest der Treiber aus der Registry
-  (`HKLM\SOFTWARE\Monivox\Monitors`). Bei Änderung wird das Gerät neu gestartet.
-- **Signierung (korrigiert am 30.10.2026):**
-  - Die Pflicht zur **Microsoft-Attestierungssignatur** gilt für **Kernel-Mode**-Treiber. Ein IDD ist ein
-    **User-Mode-Treiber (UMDF)**; seine Kernel-Teile (`WUDFRd.sys`, `IndirectKmd.sys`) stammen von Microsoft.
-  - Für UMDF-Treiber reicht eine Authenticode-Signatur, deren Zertifikat Windows vertraut
-    („Vertrauenswürdige Stammzertifizierungsstellen“ + „Vertrauenswürdige Herausgeber“). So installieren
-    auch verbreitete Open-Source-IDDs wie *virtual-display-rs* ihre Treiber.
-  - **Folge: kein Testsignatur-Modus, Secure Boot bleibt an.** Damit entfällt das eigentliche Anti-Cheat-Problem
-    (Vanguard/FACEIT verweigern nur bei aktiver Testsignatur).
-  - Umsetzung: Die CI erzeugt pro Build ein Einweg-Codesigning-Zertifikat, signiert DLL und Katalog und
-    vernichtet den privaten Schlüssel. Der Installer vertraut nur diesem einen Zertifikat (EKU: nur Code Signing)
-    und entfernt ältere MONIVOX-Zertifikate.
-  - Restrisiko/Nachteil: Ein selbst ausgestelltes Zertifikat im Stammspeicher wirkt auf manche Virenscanner
-    verdächtig. Saubere Lösung für Version 1.0: kostenlose Signatur über die *SignPath Foundation*
-    (nur für öffentliche Open-Source-Projekte) oder ein gekauftes Codesigning-Zertifikat.
-  - Der Compositor bleibt treiberunabhängig: **Backend B** (signierter
-    [Virtual Display Driver](https://github.com/VirtualDrivers/Virtual-Display-Driver)) funktioniert weiterhin
-    mit `--external`.
-  - ⚠️ Noch auf echter Hardware zu bestätigen: Laden des Treibers mit Secure Boot an und Testsignatur aus.
+- MONIVOX liefert den **Virtual Display Driver** (VDD, Open Source, MIT) unverändert mit. Er ist ein
+  IddCx-Treiber (User-Mode, UMDF) und über die SignPath Foundation **offiziell signiert**.
+- Damit: **kein Testsignatur-Modus, kein selbst ausgestelltes Zertifikat, Secure Boot bleibt an.** Die Kernel-Teile
+  (`WUDFRd.sys`, `IndirectKmd.sys`) stammen von Microsoft.
+- Steuerung: Monitoranzahl, Auflösungen und Bildwiederholraten in `vdd_settings.xml`; Neuladen über die Pipe
+  `\\.\pipe\MTTVirtualDisplayPipe` (`RELOAD_DRIVER`), Fallback Geräteneustart. Installation: Katalog-Zertifikat
+  als vertrauenswürdiger Herausgeber eintragen, `pnputil /add-driver`, Software-Gerät `Root\MttVDD` anlegen.
+- Version und SHA-256 des Treiberpakets sind in der CI festgenagelt; ein manipuliertes Paket bricht den Build ab.
+- Ein eigener Treiber wurde zunächst gebaut (siehe Git-Historie) und verworfen: er hätte ein selbst ausgestelltes
+  Stammzertifikat auf dem Nutzer-PC gebraucht – schlechter für Virenscanner und Vertrauen.
 
 ## 4. Gaming – ehrliche Bewertung
 
@@ -117,8 +104,10 @@ behaupten, dass jedes Spiel auf jedem virtuellen Monitor perfekt läuft.
 
 ## 5. Weitere Einschränkungen
 
-- **DRM-geschützte Inhalte** (Netflix im Edge, manche Blu-ray-Player) werden von der Bildschirmaufnahme
-  schwarz dargestellt. Abhilfe: nur über Bildübergabe im Treiber möglich – und auch dort verhindert HDCP es teils bewusst.
+- **DRM-geschützte Inhalte** (Netflix, Disney+, Prime Video …) werden von Windows aus jeder Bildschirmaufnahme
+  herausgehalten und auf virtuellen Monitoren ohne HDCP teils gar nicht abgespielt. Das ist ein bewusster Schutz und
+  wird nicht umgangen. Lösung: **Direktbereich** – ein Bereich des Monitors wird nicht virtualisiert, sondern zeigt den
+  echten Monitor (DRM funktioniert, keine Zusatzlatenz). Erfordert eine Maus-Übergabe zwischen den Bereichen (Phase 5).
 - **Absturzsicherheit:** Stürzt der Compositor ab, sieht man den „leeren“ physischen Monitor, während
   Fenster auf unsichtbaren virtuellen Monitoren liegen. Daher: Watchdog-Dienst startet den Compositor neu;
   Not-Tastenkombination `Strg+Alt+Shift+Q` beendet den Split und gibt die Maus frei; die App kann die
