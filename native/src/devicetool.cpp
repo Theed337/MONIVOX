@@ -1,6 +1,7 @@
 // MonivoxDevice – legt Software-Geräte für den mitgelieferten Virtual Display Driver an oder entfernt sie.
 //
 //   MonivoxDevice.exe create [N]       -> sorgt dafür, dass die Geräte 1..N existieren (Standard 1)
+//   MonivoxDevice.exe add i [j …]      -> sorgt dafür, dass die Geräte mit den angegebenen Nummern existieren
 //   MonivoxDevice.exe remove i [j …]   -> entfernt die Geräte mit den angegebenen Nummern
 //
 // Warum mehrere Geräte? Der Virtual Display Driver hat einen bekannten Fehler: Laufen zwei oder mehr virtuelle
@@ -79,15 +80,15 @@ namespace
 
 int wmain(int argc, wchar_t** argv)
 {
-    if (argc < 2 || (_wcsicmp(argv[1], L"create") != 0 && _wcsicmp(argv[1], L"remove") != 0))
+    if (argc < 2 || (_wcsicmp(argv[1], L"create") != 0 && _wcsicmp(argv[1], L"remove") != 0 && _wcsicmp(argv[1], L"add") != 0))
     {
         fwprintf(stderr, L"Aufruf: MonivoxDevice.exe create [Anzahl] | remove Nummer [Nummer …]\n");
         return 2;
     }
-    const bool create = _wcsicmp(argv[1], L"create") == 0;
+    const bool create = _wcsicmp(argv[1], L"remove") != 0;
 
     std::vector<int> indices;
-    if (create)
+    if (_wcsicmp(argv[1], L"create") == 0)
     {
         int count = argc >= 3 ? _wtoi(argv[2]) : 1;
         if (count < 1) count = 1;

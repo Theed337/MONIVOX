@@ -180,41 +180,51 @@ public static class VddControl
         bool settingsChanged = VddSettings.Apply(doc, 1, modes);
         if (settingsChanged) doc.Save(SettingsPath);
 
-        // Überzählige MONIVOX-Geräte entfernen, fehlende anlegen
-        var existing = MonivoxDeviceNumbers();
-        var extra = existing.Where(n => n > monitorCount).ToList();
-        if (extra.Count > 0) RunDeviceTool("remove " + string.Join(" ", extra), log);
-        bool created = existing.Count(n => n <= monitorCount) < monitorCount;
-        if (created)
+        // Gesperrte (deaktivierte) Geräte älterer Versionen entfernen; gelingt das nicht, werden sie übersprungen
+        var blocked = new HashSet<int>();
+        foreach (var instance in FindDeviceInstances().Where(id => id.StartsWith(@"SWD\Monivox\", StringComparison.OrdinalIgnoreCase) && IsDisabled(id)))
         {
-            log($"Lege {monitorCount} Treibergeräte an …");
-            RunDeviceTool($"create {monitorCount}", log);
-        }
-
-        // Von älteren Versionen deaktivierte Geräte wieder einschalten – notfalls neu anlegen
-        foreach (var instance in SortedInstances().Where(IsDisabled))
-        {
-            try { Run("pnputil.exe", $"/enable-device \"{instance}\"", log, allowed: [0, 3010]); }
+            try
+            {
+                Run("pnputil.exe", $"/remove-device \"{instance}\"", log, allowed: [0, 3010]);
+                log($"Gesperrtes Gerät {instance} entfernt.");
+            }
             catch (InvalidOperationException)
             {
-                int n = DeviceNumber(instance);
-                log($"Gerät {instance} ließ sich nicht einschalten – lege es neu an.");
-                RunDeviceTool($"remove {n}", log);
-                RunDeviceTool($"create {monitorCount}", log);
+                blocked.Add(DeviceNumber(instance));
+                log($"Gerät {instance} ist von Windows gesperrt – wird übersprungen.");
             }
-            created = true;
+        }
+        blocked.UnionWith(FindDeviceInstances().Where(id => id.StartsWith(@"SWD\Monivox\", StringComparison.OrdinalIgnoreCase) && IsDisabled(id)).Select(DeviceNumber));
+
+        // Benötigte Gerätenummern: die ersten N, die nicht gesperrt sind
+        var wanted = Enumerable.Range(1, 64).Where(n => !blocked.Contains(n)).Take(monitorCount).ToList();
+        if (wanted.Count < monitorCount || wanted[^1] > 24)
+            throw new InvalidOperationException("Zu viele Treibergeräte sind von Windows gesperrt. Bitte im Geräte-Manager „Virtual Display Driver (MONIVOX …)“ deinstallieren und neu starten.");
+
+        // Überzählige MONIVOX-Geräte entfernen, fehlende anlegen
+        var existing = MonivoxDeviceNumbers().Where(n => !blocked.Contains(n)).ToList();
+        var extra = existing.Where(n => !wanted.Contains(n)).ToList();
+        if (extra.Count > 0) RunDeviceTool("remove " + string.Join(" ", extra), log);
+        var missing = wanted.Where(n => !existing.Contains(n)).ToList();
+        bool created = missing.Count > 0;
+        if (created)
+        {
+            log($"Lege {missing.Count} Treibergeräte an …");
+            RunDeviceTool("add " + string.Join(" ", missing), log);
         }
 
         if (!created && settingsChanged)
         {
             // Neue Auflösungen: Geräte neu starten, damit der Treiber die Datei neu liest
-            foreach (var instance in SortedInstances().Take(monitorCount))
+            foreach (var instance in SortedInstances().Where(id => !IsDisabled(id) && wanted.Contains(DeviceNumber(id))))
             {
                 try { Run("pnputil.exe", $"/restart-device \"{instance}\"", log, allowed: [0, 3010]); }
                 catch (InvalidOperationException)
                 {
-                    RunDeviceTool($"remove {DeviceNumber(instance)}", log);
-                    RunDeviceTool($"create {monitorCount}", log);
+                    int n = DeviceNumber(instance);
+                    RunDeviceTool($"remove {n}", log);
+                    RunDeviceTool($"add {n}", log);
                 }
             }
         }
@@ -229,7 +239,9 @@ public static class VddControl
     private static void RemoveDevices(Action<string> log)
     {
         MarkInstalled();
-        var numbers = MonivoxDeviceNumbers();
+        var numbers = FindDeviceInstances()
+            .Where(id => id.StartsWith(@"SWD\Monivox\", StringComparison.OrdinalIgnoreCase) && !IsDisabled(id))
+            .Select(DeviceNumber).Distinct().ToList();
         if (numbers.Count == 0) return;
         try { RunDeviceTool("remove " + string.Join(" ", numbers), log); }
         catch (InvalidOperationException e) { log($"Treibergeräte entfernen: {e.Message}"); }
