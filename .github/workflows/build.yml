@@ -29,13 +29,20 @@ jobs:
       - name: Treiber bauen (unsigniert)
         shell: pwsh
         run: |
-          msbuild driver\MonivoxDriver.sln /m /p:Configuration=Release /p:Platform=x64 /p:SignMode=Off /nologo /v:minimal | Tee-Object -FilePath msbuild.log
-          if ($LASTEXITCODE -ne 0) {
-            # Diagnose: wie die WDK-Targets die INF-Prüfung steuern
-            $t = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\build" -Recurse -Filter WindowsDriver.common.targets | Select-Object -First 1
-            if ($t) { $lines = Get-Content $t.FullName; for ($i = 640; $i -lt 705; $i++) { Write-Output "::warning::L$($i+1): $($lines[$i].Trim())" } }
-            # Fehler als Annotationen ausgeben, damit sie ohne Log-Download sichtbar sind
-            Select-String -Path msbuild.log -Pattern ": (fatal )?error |error MSB|error [A-Z]+\d+" | Select-Object -First 30 | ForEach-Object { Write-Output "::error::$($_.Line.Trim())" }
+          # Die WDK-INF-Prüfung lädt 'x86\InfVerif.dll' relativ zum Arbeitsverzeichnis. Auf den
+          # GitHub-Runnern liegt die DLL im Tools-Ordner des WDK – msbuild daher von dort starten.
+          $dll = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\Tools" -Recurse -Filter InfVerif.dll -ErrorAction SilentlyContinue |
+                 Where-Object { $_.Directory.Name -eq 'x86' } | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $dll) { Write-Output "::error::InfVerif.dll nicht gefunden"; exit 1 }
+          Write-Output "InfVerif: $($dll.FullName)"
+          $sln = Join-Path $PWD 'driver\MonivoxDriver.sln'
+          $log = Join-Path $PWD 'msbuild.log'
+          Push-Location $dll.Directory.Parent.FullName
+          msbuild $sln /m /p:Configuration=Release /p:Platform=x64 /p:SignMode=Off /nologo /v:minimal | Tee-Object -FilePath $log
+          $code = $LASTEXITCODE
+          Pop-Location
+          if ($code -ne 0) {
+            Select-String -Path $log -Pattern ": (fatal )?error |error MSB|error [A-Z]+\d+" | Select-Object -First 8 | ForEach-Object { Write-Output "::error::$($_.Line.Trim())" }
             exit 1
           }
       - name: Treiber signieren (Einweg-Zertifikat, keine Testsignatur nötig)

@@ -86,7 +86,4 @@
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />
-  <!-- InfVerif ist auf den GitHub-Windows-Runnern defekt (x86\InfVerif.dll fehlt).
-       Die INF wird stattdessen beim Installieren von pnputil geprüft. Lokal mit /p:MonivoxInfVerif=true aktivierbar. -->
-  <Target Name="InfVerif" Condition="'$(MonivoxInfVerif)' != 'true'" />
 </Project>
