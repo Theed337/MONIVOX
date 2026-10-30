@@ -1,0 +1,129 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+env:
+  # Jeder Build bekommt eine fortlaufende Version; Releases entstehen nur auf main.
+  MONIVOX_VERSION: 0.2.${{ github.run_number }}
+
+jobs:
+  core-tests:
+    name: Kernlogik-Tests (.NET)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - run: dotnet test tests/Monivox.Core.Tests -c Release --logger "console;verbosity=normal"
+
+  driver:
+    name: IDD-Treiber (WDK)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: microsoft/setup-msbuild@v2
+      - name: Treiber bauen (unsigniert)
+        run: msbuild driver\MonivoxDriver.sln /m /p:Configuration=Release /p:Platform=x64 /p:SignMode=Off
+      - name: Treiber signieren (Einweg-Zertifikat, keine Testsignatur nötig)
+        shell: pwsh
+        run: |
+          # UMDF-Treiber (wie IDDs) laufen im User-Mode. Windows verlangt dafür eine gültige
+          # Authenticode-Signatur, deren Zertifikat beim Nutzer in "Vertrauenswürdige Stammzertifizierungsstellen"
+          # und "Vertrauenswürdige Herausgeber" liegt – KEINEN Testsignatur-Modus.
+          # Das Zertifikat wird pro Build neu erzeugt; der private Schlüssel verlässt den Build-Runner nie
+          # und wird mit ihm vernichtet. Es kann ausschließlich Code signieren (EKU Code Signing).
+          $inf = Get-ChildItem build\driver -Recurse -Filter MonivoxIdd.inf | Where-Object { Test-Path (Join-Path $_.DirectoryName 'MonivoxIdd.dll') } | Select-Object -First 1
+          if (-not $inf) { Get-ChildItem build\driver -Recurse | Select-Object FullName; throw "Treiberpaket nicht gefunden" }
+          $pkg = $inf.DirectoryName
+          $kits = "${env:ProgramFiles(x86)}\Windows Kits\10\bin"
+          $signtool = Get-ChildItem $kits -Recurse -Filter signtool.exe | Where-Object { $_.FullName -match '\\x64\\' } | Sort-Object FullName -Descending | Select-Object -First 1
+          $inf2cat = Get-ChildItem $kits -Recurse -Filter Inf2Cat.exe | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $signtool -or -not $inf2cat) { throw "signtool/Inf2Cat nicht gefunden" }
+
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=MONIVOX Driver Signing" `
+                    -CertStoreLocation Cert:\CurrentUser\My -KeyAlgorithm RSA -KeyLength 3072 -HashAlgorithm SHA256 `
+                    -NotAfter (Get-Date).AddYears(5)
+          $ts = "http://timestamp.digicert.com"
+          & $signtool.FullName sign /fd sha256 /sha1 $cert.Thumbprint /tr $ts /td sha256 (Join-Path $pkg MonivoxIdd.dll)
+          if ($LASTEXITCODE -ne 0) { throw "DLL-Signatur fehlgeschlagen" }
+          Remove-Item (Join-Path $pkg *.cat) -ErrorAction SilentlyContinue
+          & $inf2cat.FullName /driver:$pkg /os:10_X64 /uselocaltime
+          if ($LASTEXITCODE -ne 0) { throw "Inf2Cat fehlgeschlagen" }
+          & $signtool.FullName sign /fd sha256 /sha1 $cert.Thumbprint /tr $ts /td sha256 (Join-Path $pkg MonivoxIdd.cat)
+          if ($LASTEXITCODE -ne 0) { throw "Katalog-Signatur fehlgeschlagen" }
+
+          New-Item -ItemType Directory -Force driver-package | Out-Null
+          Copy-Item (Join-Path $pkg '*') driver-package -Recurse
+          Export-Certificate -Cert $cert -FilePath driver-package\MonivoxDriver.cer | Out-Null
+          Remove-Item -Path "Cert:\CurrentUser\My\$($cert.Thumbprint)" -DeleteKey
+          Get-ChildItem driver-package
+      - uses: actions/upload-artifact@v4
+        with:
+          name: driver-package
+          path: driver-package
+
+  native-and-cli:
+    name: Compositor + CLI
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Native Komponenten (CMake/MSVC)
+        run: |
+          cmake -S native -B build\native -A x64
+          cmake --build build\native --config Release
+      - name: CLI veröffentlichen
+        run: dotnet publish src\Monivox.Cli -c Release -r win-x64 --self-contained false -o dist\Monivox -p:Version=${{ env.MONIVOX_VERSION }}
+      - name: Zusammenstellen
+        shell: pwsh
+        run: |
+          Copy-Item build\native\Release\MonivoxCompositor.exe dist\Monivox\
+          Copy-Item build\native\Release\MonivoxDevice.exe dist\Monivox\
+          New-Item -ItemType Directory -Force dist\Monivox\scripts | Out-Null
+          Copy-Item scripts\*.ps1 dist\Monivox\scripts\
+          Copy-Item README.md, docs\MACHBARKEIT.md dist\Monivox\
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app
+          path: dist/Monivox
+
+  package:
+    name: Gesamtpaket + Release
+    needs: [core-tests, driver, native-and-cli]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: app
+          path: Monivox
+      - uses: actions/download-artifact@v4
+        with:
+          name: driver-package
+          path: Monivox/driver-package
+      - name: ZIP + Prüfsumme
+        run: |
+          cd Monivox && zip -qr ../Monivox-win-x64.zip . && cd ..
+          sha256sum Monivox-win-x64.zip | cut -d' ' -f1 > Monivox-win-x64.zip.sha256
+          cat Monivox-win-x64.zip.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Monivox-win-x64
+          path: Monivox
+      - name: Release veröffentlichen (Auto-Update-Quelle)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${MONIVOX_VERSION}" Monivox-win-x64.zip Monivox-win-x64.zip.sha256 \
+            --repo "${{ github.repository }}" \
+            --title "MONIVOX ${MONIVOX_VERSION}" \
+            --notes "Automatisch erstellt aus ${GITHUB_SHA::7}. MONIVOX lädt dieses Update selbstständig." \
+            --target "${GITHUB_SHA}"
