@@ -23,6 +23,7 @@ public sealed class LayoutEditor : FrameworkElement
     private readonly List<string> _names = [];
     private int _selected = -1;
     private int _direct = -1;
+    private readonly HashSet<int> _hiddenTaskbars = [];
     private Edge _drag;
     private Point _dragStart;
     private NormRect _dragOrigin;
@@ -44,6 +45,14 @@ public sealed class LayoutEditor : FrameworkElement
     public IReadOnlyList<NormRect> Regions => _regions;
     public IReadOnlyList<string> Names => _names;
 
+    public bool IsTaskbarHidden(int index) => _hiddenTaskbars.Contains(index);
+
+    public void SetTaskbarHidden(int index, bool hidden)
+    {
+        if (hidden) _hiddenTaskbars.Add(index); else _hiddenTaskbars.Remove(index);
+        Changed?.Invoke();
+    }
+
     /// <summary>Index des Direktbereichs (echtes Monitorbild, keine Latenz, DRM) oder -1.</summary>
     public int DirectIndex
     {
@@ -64,11 +73,13 @@ public sealed class LayoutEditor : FrameworkElement
         _names.Clear();
         for (int i = 0; i < _regions.Count; i++) _names.Add(layout.RegionName(i));
         _direct = layout.HasDirect ? layout.DirectIndex : -1;
+        _hiddenTaskbars.Clear();
+        foreach (var i in layout.HiddenTaskbars) if (i >= 0 && i < _regions.Count) _hiddenTaskbars.Add(i);
         SelectedIndex = _regions.Count > 0 ? 0 : -1;
         InvalidateVisual();
     }
 
-    public Layout ToLayout(string name) => new(name, _regions) { Names = _names.ToList(), DirectIndex = _direct };
+    public Layout ToLayout(string name) => new(name, _regions) { Names = _names.ToList(), DirectIndex = _direct, HiddenTaskbars = _hiddenTaskbars.OrderBy(i => i).ToList() };
 
     public void SetRegion(int index, NormRect rect)
     {
@@ -100,6 +111,7 @@ public sealed class LayoutEditor : FrameworkElement
         _names.RemoveAt(_selected);
         if (_direct == _selected) _direct = -1;
         else if (_direct > _selected) _direct--;
+        ShiftTaskbars(_selected, -1);
         SelectedIndex = Math.Min(_selected, _regions.Count - 1);
         Changed?.Invoke();
     }
@@ -125,8 +137,32 @@ public sealed class LayoutEditor : FrameworkElement
         _regions[_selected] = a;
         _regions.Insert(_selected + 1, b);
         if (_direct > _selected) _direct++;
+        ShiftTaskbars(_selected + 1, +1);
         _names.Insert(_selected + 1, $"Bereich {_regions.Count}");
         SelectedIndex = _selected + 1;
+        Changed?.Invoke();
+    }
+
+    /// <summary>Hält die Taskleisten-Markierungen beim Entfernen/Einfügen von Bereichen passend.</summary>
+    private void ShiftTaskbars(int from, int delta)
+    {
+        var updated = new HashSet<int>();
+        foreach (var i in _hiddenTaskbars)
+        {
+            if (delta < 0 && i == from) continue;
+            updated.Add(i >= from ? i + delta : i);
+        }
+        _hiddenTaskbars.Clear();
+        foreach (var i in updated) _hiddenTaskbars.Add(i);
+    }
+
+    public void Clear()
+    {
+        _regions.Clear();
+        _names.Clear();
+        _hiddenTaskbars.Clear();
+        _direct = -1;
+        SelectedIndex = -1;
         Changed?.Invoke();
     }
 
@@ -316,7 +352,6 @@ public sealed class LayoutEditor : FrameworkElement
     protected override void OnRender(DrawingContext dc)
     {
         var res = Application.Current.Resources;
-        var text = (Brush)res["Text"];
         var accent = ((SolidColorBrush)res["Accent"]).Color;
         var danger = ((SolidColorBrush)res["Danger"]).Color;
         var m = MonitorRect();
@@ -340,10 +375,29 @@ public sealed class LayoutEditor : FrameworkElement
             dc.DrawRoundedRectangle(fill, pen, new Rect(r.X + 1, r.Y + 1, Math.Max(0, r.Width - 2), Math.Max(0, r.Height - 2)), 4, 4);
 
             int pw = (int)Math.Round(_regions[i].Width * PhysicalWidth), ph = (int)Math.Round(_regions[i].Height * PhysicalHeight);
-            string kind = direct ? "★ DIREKT – keine Latenz, DRM ✓" : "virtuell";
-            var label = new FormattedText($"{i + 1}  {_names[i]}\n{pw} × {ph} · {kind}", CultureInfo.CurrentUICulture, FlowDirection.LeftToRight,
-                new Typeface("Segoe UI"), 12, Brushes.White, dpi) { MaxTextWidth = Math.Max(10, r.Width - 12), MaxTextHeight = Math.Max(10, r.Height - 8) };
-            dc.DrawText(label, new Point(r.X + 8, r.Y + 6));
+            string kind = direct ? "★ DIREKT · keine Latenz · DRM" : "virtuell";
+            var title = new FormattedText($"{i + 1}  {_names[i]}", CultureInfo.CurrentUICulture, FlowDirection.LeftToRight,
+                new Typeface(new FontFamily("Segoe UI"), FontStyles.Normal, FontWeights.SemiBold, FontStretches.Normal), 15, Brushes.White, dpi)
+                { MaxTextWidth = Math.Max(10, r.Width - 20), MaxLineCount = 1, Trimming = TextTrimming.CharacterEllipsis };
+            var detail = new FormattedText($"{pw} × {ph} · {kind}", CultureInfo.CurrentUICulture, FlowDirection.LeftToRight,
+                new Typeface("Segoe UI"), 13, new SolidColorBrush(Color.FromRgb(235, 235, 235)), dpi)
+                { MaxTextWidth = Math.Max(10, r.Width - 20), MaxLineCount = 1, Trimming = TextTrimming.CharacterEllipsis };
+            // Dunkle Plakette hinter der Schrift – auf jeder Bereichsfarbe gut lesbar
+            double badgeW = Math.Min(r.Width - 8, Math.Max(title.Width, detail.Width) + 16);
+            double badgeH = title.Height + detail.Height + 10;
+            if (badgeW > 20 && r.Height > badgeH + 6)
+            {
+                dc.DrawRoundedRectangle(new SolidColorBrush(Color.FromArgb(200, 18, 18, 22)), null,
+                    new Rect(r.X + 5, r.Y + 5, badgeW, badgeH), 5, 5);
+                dc.DrawText(title, new Point(r.X + 13, r.Y + 9));
+                dc.DrawText(detail, new Point(r.X + 13, r.Y + 9 + title.Height));
+            }
+            else if (r.Width > 24 && r.Height > 20)
+            {
+                var num = new FormattedText($"{i + 1}", CultureInfo.CurrentUICulture, FlowDirection.LeftToRight,
+                    new Typeface("Segoe UI"), 13, Brushes.White, dpi);
+                dc.DrawText(num, new Point(r.X + 5, r.Y + 3));
+            }
 
             if (sel)
             {
@@ -354,8 +408,8 @@ public sealed class LayoutEditor : FrameworkElement
 
         if (_regions.Count == 0)
         {
-            var hint = new FormattedText("Ziehe mit der Maus Bereiche auf – oder wähle oben eine Vorlage.",
-                CultureInfo.CurrentUICulture, FlowDirection.LeftToRight, new Typeface("Segoe UI"), 14, text, dpi);
+            var hint = new FormattedText("Halte die linke Maustaste gedrückt und ziehe hier deinen ersten Bereich auf.",
+                CultureInfo.CurrentUICulture, FlowDirection.LeftToRight, new Typeface("Segoe UI"), 16, Brushes.White, dpi);
             dc.DrawText(hint, new Point(m.X + (m.Width - hint.Width) / 2, m.Y + (m.Height - hint.Height) / 2));
         }
     }

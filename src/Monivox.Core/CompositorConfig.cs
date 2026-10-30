@@ -6,7 +6,7 @@ namespace Monivox.Core;
 /// <summary>Erzeugt die Konfigurationsdatei für MonivoxCompositor.exe (siehe native/src/compositor.cpp).</summary>
 public static class CompositorConfig
 {
-    public sealed record View(string Device, PixelRect Dest, string Name);
+    public sealed record View(string Device, PixelRect Dest, string Name, bool HideTaskbar = false);
 
     /// <param name="physicalDevice">GDI-Gerätename des physischen Monitors, z. B. \\.\DISPLAY1.</param>
     /// <param name="views">Virtuelle Bereiche: Quellmonitor, Zielrechteck auf dem physischen Monitor, Name.</param>
@@ -29,6 +29,8 @@ public static class CompositorConfig
             var d = dr.Rect;
             sb.AppendLine(CultureInfo.InvariantCulture, $"direct={d.X},{d.Y},{d.Width},{d.Height},{Clean(dr.Name)}");
         }
+        var hidden = views.Select((v, i) => (v, i)).Where(x => x.v.HideTaskbar).Select(x => x.i.ToString(CultureInfo.InvariantCulture)).ToList();
+        if (hidden.Count > 0) sb.AppendLine($"hidetaskbar={string.Join(",", hidden)}");
         if (panelOrigin is { } po) sb.AppendLine(CultureInfo.InvariantCulture, $"panel={po.X},{po.Y}");
         sb.AppendLine(CultureInfo.InvariantCulture, $"frames={(frames ? 1 : 0)}");
         return sb.ToString();

@@ -10,7 +10,7 @@ namespace Monivox.Core;
 public sealed record Layout
 {
     /// <summary>Maximale Anzahl Bereiche pro Monitor.</summary>
-    public const int MaxRegions = 8;
+    public const int MaxRegions = 24;
 
     /// <summary>Kleinste sinnvolle Bereichsgröße in Pixeln. Kleinere Bereiche als 640x480 werden über
     /// einen größeren virtuellen Monitor im selben Seitenverhältnis dargestellt.</summary>
@@ -28,6 +28,9 @@ public sealed record Layout
     /// sein Bild direkt an – keine Zusatzlatenz, G-Sync/FreeSync und kopiergeschützte Videos (DRM) funktionieren.
     /// </summary>
     public int DirectIndex { get; init; } = -1;
+
+    /// <summary>Bereiche (Indizes), auf denen die Windows-Taskleiste ausgeblendet wird.</summary>
+    public IReadOnlyList<int> HiddenTaskbars { get; init; } = [];
 
     public bool HasDirect => DirectIndex >= 0 && DirectIndex < Regions.Count;
 

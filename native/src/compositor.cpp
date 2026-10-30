@@ -89,6 +89,7 @@ namespace
     struct ViewConfig : Area
     {
         std::wstring Device;
+        bool HideTaskbar = false;
     };
 
     struct Config
@@ -160,6 +161,19 @@ namespace
             std::wstring value = Trim(line.substr(eq + 1));
 
             if (key == L"physical") cfg.Physical = value;
+            else if (key == L"hidetaskbar")
+            {
+                // Indizes der view-Zeilen, deren Taskleiste ausgeblendet wird, z. B. "0,2"
+                size_t p = 0;
+                while (p < value.size())
+                {
+                    size_t c = value.find(L',', p);
+                    int idx = _wtoi(value.substr(p, c == std::wstring::npos ? std::wstring::npos : c - p).c_str());
+                    if (idx >= 0 && idx < static_cast<int>(cfg.Views.size())) cfg.Views[idx].HideTaskbar = true;
+                    if (c == std::wstring::npos) break;
+                    p = c + 1;
+                }
+            }
             else if (key == L"frames") cfg.Frames = value != L"0";
             else if (key == L"panel")
             {
@@ -339,6 +353,21 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
 
         POINT m_LastPos{};
         Location m_LastLoc;
+        bool m_UseRawInput = false;
+
+        // Taskleisten auf virtuellen Bereichen ausblenden
+        std::vector<HWND> m_HiddenTaskbars;
+        std::vector<HMONITOR> m_WorkFixed;
+        void UpdateTaskbars();
+        void RestoreTaskbars();
+        int m_WorkAreaResets = 0;
+
+        // Leistungsmessung (alle 10 s ins Protokoll)
+        ULONGLONG m_StatsStart = 0;
+        std::atomic<unsigned> m_StatFrames{ 0 };
+        unsigned m_StatPresents = 0;
+        double m_StatRenderMs = 0;
+        void LogStats();
     };
 
     Compositor* g_instance = nullptr;
@@ -347,9 +376,34 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
 
     bool Compositor::InitD3D()
     {
+        // Grafikkarte wählen, an der der physische Monitor hängt (vermeidet teure Kopien zwischen GPUs)
+        ComPtr<IDXGIAdapter1> chosen;
+        ComPtr<IDXGIFactory1> factory;
+        if (SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))))
+        {
+            ComPtr<IDXGIAdapter1> adapter;
+            for (UINT a = 0; !chosen && factory->EnumAdapters1(a, &adapter) != DXGI_ERROR_NOT_FOUND; ++a)
+            {
+                ComPtr<IDXGIOutput> output;
+                for (UINT o = 0; adapter->EnumOutputs(o, &output) != DXGI_ERROR_NOT_FOUND; ++o)
+                {
+                    DXGI_OUTPUT_DESC od{};
+                    if (SUCCEEDED(output->GetDesc(&od)) && _wcsicmp(od.DeviceName, m_Cfg.Physical.c_str()) == 0)
+                    {
+                        chosen = adapter;
+                        DXGI_ADAPTER_DESC1 ad{};
+                        adapter->GetDesc1(&ad);
+                        Log(L"Grafikkarte: %s", ad.Description);
+                        break;
+                    }
+                }
+            }
+        }
+
         D3D_FEATURE_LEVEL levels[] = { D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0 };
-        HRESULT hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-                                       levels, ARRAYSIZE(levels), D3D11_SDK_VERSION, &m_Device, nullptr, &m_Context);
+        HRESULT hr = D3D11CreateDevice(chosen.Get(), chosen ? D3D_DRIVER_TYPE_UNKNOWN : D3D_DRIVER_TYPE_HARDWARE, nullptr,
+                                       D3D11_CREATE_DEVICE_BGRA_SUPPORT, levels, ARRAYSIZE(levels), D3D11_SDK_VERSION,
+                                       &m_Device, nullptr, &m_Context);
         if (FAILED(hr)) { Log(L"D3D11CreateDevice: 0x%08X", hr); return false; }
 
         ComPtr<ID3D11Multithread> mt;
@@ -379,7 +433,13 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
 
     bool Compositor::InitWindows(HINSTANCE instance)
     {
-        if (!FindMonitor(m_Cfg.Physical, m_Physical))
+        bool found = false;
+        for (int attempt = 0; attempt < 40 && !found; ++attempt)
+        {
+            found = FindMonitor(m_Cfg.Physical, m_Physical);
+            if (!found) Sleep(250);
+        }
+        if (!found)
         {
             Log(L"Physischer Monitor %s nicht gefunden", m_Cfg.Physical.c_str());
             return false;
@@ -461,16 +521,8 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
                                     nullptr, nullptr, instance, nullptr);
         SetWindowDisplayAffinity(m_Overlay, WDA_EXCLUDEFROMCAPTURE);
 
-        RAWINPUTDEVICE rid{};
-        rid.usUsagePage = 0x01; // Generic Desktop
-        rid.usUsage = 0x02;     // Maus
-        rid.dwFlags = RIDEV_INPUTSINK;
-        rid.hwndTarget = m_Overlay;
-        if (!RegisterRawInputDevices(&rid, 1, sizeof(rid))) Log(L"Raw Input nicht verfügbar – Maus-Brücke eingeschränkt");
-
         RegisterHotKey(m_Overlay, kHotkeyQuit, MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_NOREPEAT, 'Q');
         RegisterHotKey(m_Overlay, kHotkeyFrames, MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_NOREPEAT, 'F');
-        SetTimer(m_Overlay, kTimerHousekeeping, 50, nullptr);
         return true;
     }
 
@@ -478,9 +530,16 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
 
     bool Compositor::InitView(View& view, IGraphicsCaptureItemInterop* interop)
     {
-        if (!FindMonitor(view.Cfg.Device, view.Source))
+        // Frisch angelegte Monitore tauchen manchmal erst nach einigen hundert Millisekunden auf
+        bool found = false;
+        for (int attempt = 0; attempt < 40 && !found; ++attempt)
         {
-            Log(L"Quellmonitor %s nicht gefunden", view.Cfg.Device.c_str());
+            found = FindMonitor(view.Cfg.Device, view.Source);
+            if (!found) Sleep(250);
+        }
+        if (!found)
+        {
+            Log(L"Quellmonitor %s nach 10 s nicht gefunden", view.Cfg.Device.c_str());
             return false;
         }
         HRESULT hr = interop->CreateForMonitor(view.Source.Handle, winrt::guid_of<wgc::GraphicsCaptureItem>(), winrt::put_abi(view.Item));
@@ -541,6 +600,7 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
             pool.Recreate(m_WinrtDevice, wgd::DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, size);
         }
         view.Dirty = true;
+        m_StatFrames++;
         SetEvent(m_FrameEvent);
     }
 
@@ -569,7 +629,13 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
             m_Context->PSSetShaderResources(0, 1, &none);
 
             // Sync 0: DWM setzt das Bild beim nächsten Bildaufbau ein – mehrere Fenster blockieren sich nicht.
+            LARGE_INTEGER t0, t1, f;
+            QueryPerformanceCounter(&t0);
             HRESULT hr = view->SwapChain->Present(0, 0);
+            QueryPerformanceCounter(&t1);
+            QueryPerformanceFrequency(&f);
+            m_StatRenderMs += (t1.QuadPart - t0.QuadPart) * 1000.0 / f.QuadPart;
+            m_StatPresents++;
             if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET)
             {
                 Log(L"Grafikgerät verloren (0x%08X)", hr);
@@ -578,6 +644,72 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
                 return;
             }
         }
+    }
+
+    struct TaskbarScan { std::vector<HWND> Windows; };
+
+    BOOL CALLBACK CollectTaskbars(HWND hwnd, LPARAM param)
+    {
+        wchar_t cls[64]{};
+        GetClassNameW(hwnd, cls, 64);
+        if (wcscmp(cls, L"Shell_SecondaryTrayWnd") == 0 || wcscmp(cls, L"Shell_TrayWnd") == 0)
+            reinterpret_cast<TaskbarScan*>(param)->Windows.push_back(hwnd);
+        return TRUE;
+    }
+
+    // Blendet die Taskleiste auf gewählten virtuellen Bereichen aus. Der Explorer zeigt sie bei manchen
+    // Ereignissen wieder an, daher wird sekündlich nachgesehen. Der freie Platz wird dem Arbeitsbereich
+    // zugeschlagen (einmalig, damit nicht ständig Änderungsmeldungen an alle Fenster gehen).
+    void Compositor::UpdateTaskbars()
+    {
+        bool any = false;
+        for (auto& v : m_Views) any |= v->Cfg.HideTaskbar;
+        if (!any) return;
+
+        TaskbarScan scan;
+        EnumWindows(CollectTaskbars, reinterpret_cast<LPARAM>(&scan));
+        for (HWND tb : scan.Windows)
+        {
+            HMONITOR mon = MonitorFromWindow(tb, MONITOR_DEFAULTTONULL);
+            for (auto& v : m_Views)
+            {
+                if (!v->Cfg.HideTaskbar || v->Source.Handle != mon) continue;
+                if (IsWindowVisible(tb))
+                {
+                    ShowWindow(tb, SW_HIDE);
+                    if (std::find(m_HiddenTaskbars.begin(), m_HiddenTaskbars.end(), tb) == m_HiddenTaskbars.end())
+                        m_HiddenTaskbars.push_back(tb);
+                }
+                if (std::find(m_WorkFixed.begin(), m_WorkFixed.end(), mon) == m_WorkFixed.end())
+                {
+                    m_WorkFixed.push_back(mon);
+                    RECT full = v->Source.Rect;
+                    SystemParametersInfoW(SPI_SETWORKAREA, 0, &full, SPIF_SENDCHANGE);
+                }
+            }
+        }
+    }
+
+    void Compositor::RestoreTaskbars()
+    {
+        for (HWND tb : m_HiddenTaskbars)
+            if (IsWindow(tb)) ShowWindow(tb, SW_SHOWNA);
+        m_HiddenTaskbars.clear();
+    }
+
+    void Compositor::LogStats()
+    {
+        ULONGLONG now = GetTickCount64();
+        if (m_StatsStart == 0) { m_StatsStart = now; return; }
+        if (now - m_StatsStart < 10000) return;
+        double secs = (now - m_StatsStart) / 1000.0;
+        unsigned frames = m_StatFrames.exchange(0);
+        Log(L"Leistung: %.1f Aufnahmen/s, %.1f Bilder/s, Present Ø %.2f ms, Maus-Brücke %s",
+            frames / secs, m_StatPresents / secs, m_StatPresents ? m_StatRenderMs / m_StatPresents : 0.0,
+            m_UseRawInput ? L"Raw Input" : L"leicht");
+        m_StatsStart = now;
+        m_StatPresents = 0;
+        m_StatRenderMs = 0;
     }
 
     // ------------------------------------------------------------------- Rahmen
@@ -709,6 +841,13 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
         }
         if (!EqualRect(&now.Work, &m_DirectScreen))
         {
+            if (m_WorkAreaResets >= 3)
+            {
+                if (m_WorkAreaResets == 3) Log(L"Arbeitsbereich wird vom System zurückgesetzt – gebe auf (verhindert Ruckler)");
+                m_WorkAreaResets = 4;
+                return;
+            }
+            ++m_WorkAreaResets;
             RECT r = m_DirectScreen;
             SystemParametersInfoW(SPI_SETWORKAREA, 0, &r, SPIF_SENDCHANGE);
         }
@@ -858,7 +997,8 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
 
         // 2) Unerlaubter Wechsel über die Desktop-Anordnung (z. B. vom virtuellen Block auf einen echten Monitor)
         bool illegal = false;
-        if (lastLoc.Kind == AreaKind::Virtual && loc.Kind != AreaKind::Virtual) illegal = true;
+        if (lastLoc.Kind == AreaKind::Virtual && loc.Kind == AreaKind::Direct) illegal = true;
+        else if (lastLoc.Kind == AreaKind::Virtual && loc.Kind == AreaKind::Other && (m_Cfg.Direct || !m_Mirrored)) illegal = true;
         else if (lastLoc.Kind == AreaKind::Virtual && loc.Kind == AreaKind::Virtual && loc.View != lastLoc.View && !m_Mirrored) illegal = true;
         else if (lastLoc.Kind != AreaKind::Virtual && loc.Kind == AreaKind::Virtual && (m_Cfg.Direct || !m_Mirrored)) illegal = true;
 
@@ -890,6 +1030,7 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
             if (view->Pool) view->Pool.Close();
             if (view->Hwnd) DestroyWindow(view->Hwnd);
         }
+        RestoreTaskbars();
         m_Views.clear();
         if (m_WorkAreaSet)
         {
@@ -936,9 +1077,20 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
             {
                 // Maus z. B. per Touch/Programm auf verdeckten Bereich gesetzt -> korrigieren
                 POINT p{};
-                if (!self->ForeignClipActive() && GetCursorPos(&p) && self->Locate(p).Kind == AreaKind::Covered) self->OnRawMouse(0, 0, true);
-                static int tick = 0;
-                if (++tick % 40 == 0) self->ApplyWorkArea(); // alle 2 s
+                if (self->m_UseRawInput)
+                {
+                    // Maus z. B. per Touch/Programm auf verdeckten Bereich gesetzt -> korrigieren
+                    if (!self->ForeignClipActive() && GetCursorPos(&p) && self->Locate(p).Kind == AreaKind::Covered) self->OnRawMouse(0, 0, true);
+                }
+                else
+                {
+                    self->OnRawMouse(0, 0, false); // leichte Positionsprüfung
+                }
+                static ULONGLONG lastWork = 0, lastTaskbar = 0;
+                ULONGLONG now = GetTickCount64();
+                if (now - lastWork > 5000) { lastWork = now; self->ApplyWorkArea(); }
+                if (now - lastTaskbar > 1000) { lastTaskbar = now; self->UpdateTaskbars(); }
+                self->LogStats();
             }
             return 0;
         case WM_DISPLAYCHANGE:
@@ -982,6 +1134,20 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(tex.Sample(samp, i.uv).rgb, 1
         // Liegen die virtuellen Monitore wie die Bereiche (gespiegelt), wechselt die Maus zwischen ihnen natürlich.
         for (auto& v : m_Views)
             if (W(v->Source.Rect) != W(v->Cfg.Dest) || H(v->Source.Rect) != H(v->Cfg.Dest)) m_Mirrored = false;
+
+        // Raw Input wird nur gebraucht, wenn Mausübergänge umgerechnet werden müssen (Direktbereich oder
+        // hochskalierte Bereiche). Sonst reicht eine leichte Positionsprüfung – so wenig Last wie möglich.
+        m_UseRawInput = m_Cfg.Direct.has_value() || !m_Mirrored;
+        if (m_UseRawInput)
+        {
+            RAWINPUTDEVICE rid{};
+            rid.usUsagePage = 0x01; // Generic Desktop
+            rid.usUsage = 0x02;     // Maus
+            rid.dwFlags = RIDEV_INPUTSINK;
+            rid.hwndTarget = m_Overlay;
+            if (!RegisterRawInputDevices(&rid, 1, sizeof(rid))) { Log(L"Raw Input nicht verfügbar"); m_UseRawInput = false; }
+        }
+        SetTimer(m_Overlay, kTimerHousekeeping, m_UseRawInput ? 50 : 15, nullptr);
 
         ApplyWorkArea();
         SetFrames(m_Cfg.Frames);

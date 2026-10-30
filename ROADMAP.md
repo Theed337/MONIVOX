@@ -16,7 +16,8 @@ Legende: ✅ erledigt · 🔨 Code fertig, CI grün, auf Hardware ungetestet · 
 
 ## Phase 3 – Oberfläche 🔨
 - 🔨 WPF-App im Windows-11-Stil (hell/dunkel), Infobereich mit Doppelklick/Rechtsklick-Menü
-- 🔨 Freier Editor (Aufziehen, Verschieben, Kanten, Einrasten, pixelgenaue Eingabe), Vorlagen optional
+- 🔨 Freier Editor ohne Vorlagen, bis zu 24 Bereiche (Aufziehen, Verschieben, Kanten, Einrasten, pixelgenaue Eingabe)
+- 🔨 Überarbeitete Oberfläche: größere Schrift, hoher Kontrast, eigene Auswahllisten (vorher unlesbar)
 - 🔨 Profile: anlegen, umbenennen, löschen, Export/Import, Wechsel aus dem Tray
 - 🔨 Status-Seite: Treiber installieren, Anti-Cheat-Check, Protokoll
 - 🔨 Autostart über geplante Aufgabe (keine UAC-Abfrage, auch im Akkubetrieb)
@@ -30,7 +31,10 @@ Legende: ✅ erledigt · 🔨 Code fertig, CI grün, auf Hardware ungetestet · 
 - 🔨 **Direktbereich** (echter Monitor, keine Latenz, DRM) mit Maus-Brücke (Raw Input + SetCursorPos, keine Hooks)
   und angepasstem Arbeitsbereich (Maximieren füllt genau den Direktbereich)
 - 🔨 Farbige, ein-/ausblendbare Rahmen mit Beschriftung (nicht in Aufnahmen sichtbar)
-- ⬜ Taskleiste: liegt sie unten auf dem aufgeteilten Monitor und ist der untere Teil virtuell, ist sie verdeckt
+- 🔨 Taskleiste pro virtuellem Bereich ausblendbar
+- 🔨 Erster Start: wartet, bis Windows neue Monitore meldet (vorher musste man 2× auf „Teilen“ drücken)
+- 🔨 Ruckeln: Maus-Brücke nur bei Bedarf, kein Dauer-Neusetzen des Arbeitsbereichs, Compositor auf der GPU des Monitors, Leistungsmessung im Protokoll
+- ⬜ Ruckeln auf allen Monitoren beim ersten Test – Ursache noch nicht sicher, Messwerte aus dem nächsten Test nötig
 - ⬜ Mehrere Monitore gleichzeitig aufteilen
 - ⬜ `MinUpdateInterval` (Windows 11 24H2) für > 60 fps in virtuellen Bereichen
 - ⬜ Spieletests (DX11/DX12/Vulkan, Borderless/Exklusiv), Ergebnisliste

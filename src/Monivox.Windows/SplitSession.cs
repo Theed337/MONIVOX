@@ -66,7 +66,8 @@ public sealed class SplitSession(SplitOptions options, Action<string> log)
         {
             Prepare();
             int code = RunCompositor(cancel);
-            if (cancel.IsCancellationRequested || code == 0 || code == 2) return code;
+            if (cancel.IsCancellationRequested || code == 0) return code;
+            if (code == 2 && attempt >= 2) return code; // Konfiguration dauerhaft fehlerhaft
             if (attempt >= 5)
             {
                 log("Compositor ist mehrfach abgebrochen – gebe auf.");
@@ -174,6 +175,7 @@ public sealed class SplitSession(SplitOptions options, Action<string> log)
             placements.Add(new(restore.PhysicalDevice, plan.ParkedPhysical.X, plan.ParkedPhysical.Y, null, false));
         }
         DisplayArranger.Apply(placements);
+        WaitUntilArranged(placements, TimeSpan.FromSeconds(5));
         log("Monitore angeordnet.");
 
         // Nach dem Umschalten tatsächliche Modi prüfen
@@ -187,7 +189,7 @@ public sealed class SplitSession(SplitOptions options, Action<string> log)
 
         Directory.CreateDirectory(RuntimeDirectory);
         File.WriteAllText(CompositorConfigPath, CompositorConfig.Build(restore.PhysicalDevice,
-            virtualSpecs.Select(s => new CompositorConfig.View(deviceOf[s.Index], s.Dest, layout.RegionName(s.Index))),
+            virtualSpecs.Select(s => new CompositorConfig.View(deviceOf[s.Index], s.Dest, layout.RegionName(s.Index), layout.HiddenTaskbars.Contains(s.Index))),
             layout.HasDirect ? (specs[layout.DirectIndex].Dest, layout.RegionName(layout.DirectIndex)) : null,
             options.ShowFrames, panelOrigin));
 
@@ -196,6 +198,19 @@ public sealed class SplitSession(SplitOptions options, Action<string> log)
         Ready?.Invoke(specs.Select(s => layout.HasDirect && s.Index == layout.DirectIndex
             ? s.Dest.Offset(physicalNow.X, physicalNow.Y)
             : after.First(d => d.DeviceName == deviceOf[s.Index]).Bounds).ToList());
+    }
+
+    /// <summary>Wartet, bis Windows die neue Anordnung wirklich übernommen hat (sonst findet der Compositor die Monitore nicht).</summary>
+    private static void WaitUntilArranged(IReadOnlyList<DisplayArranger.Placement> placements, TimeSpan timeout)
+    {
+        var sw = Stopwatch.StartNew();
+        while (sw.Elapsed < timeout)
+        {
+            var now = Displays.Enumerate();
+            bool ok = placements.All(p => now.Any(d => d.DeviceName == p.DeviceName && d.IsAttached && d.Bounds.X == p.X && d.Bounds.Y == p.Y));
+            if (ok) return;
+            Thread.Sleep(200);
+        }
     }
 
     private IReadOnlyList<DisplayInfo> WaitForVirtualDisplays(int count, TimeSpan timeout)

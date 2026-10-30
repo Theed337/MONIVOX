@@ -25,13 +25,14 @@ public static class Theme
         void Set(string key, string hex) => res[key] = new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex));
         if (dark)
         {
-            Set("Bg", "#202020"); Set("Surface", "#2B2B2B"); Set("SurfaceAlt", "#363636"); Set("Stroke", "#404040");
-            Set("Text", "#F3F3F3"); Set("TextDim", "#A8A8A8");
+            Set("Bg", "#1C1C1C"); Set("Surface", "#272727"); Set("SurfaceAlt", "#333333"); Set("SurfaceHover", "#3D3D3D");
+            Set("Stroke", "#474747"); Set("Text", "#FFFFFF"); Set("TextDim", "#C8C8C8"); Set("Danger", "#FF6B6B"); Set("Ok", "#3DD68C");
         }
         else
         {
-            Set("Bg", "#F3F3F3"); Set("Surface", "#FFFFFF"); Set("SurfaceAlt", "#F0F0F0"); Set("Stroke", "#E0E0E0");
-            Set("Text", "#1B1B1B"); Set("TextDim", "#5F5F5F");
+            Set("Bg", "#F3F3F3"); Set("Surface", "#FFFFFF"); Set("SurfaceAlt", "#F5F5F5"); Set("SurfaceHover", "#EAEAEA");
+            Set("Stroke", "#D6D6D6"); Set("Text", "#141414"); Set("TextDim", "#4A4A4A"); Set("Danger", "#C42B1C"); Set("Ok", "#0F7B0F");
+            Set("Accent", "#6A4CE6");
         }
     }
 

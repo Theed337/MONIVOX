@@ -81,7 +81,7 @@ public class LayoutValidationTests
     [Fact]
     public void TooManyRegions_IsDetected()
     {
-        var regions = Enumerable.Range(0, 9).Select(i => new NormRect(i / 9.0, 0, 1 / 9.0, 1));
+        var regions = Enumerable.Range(0, 25).Select(i => new NormRect(i / 25.0, 0, 1 / 25.0, 1));
         Assert.Contains(new Layout("x", regions).Validate(), e => e.Contains("Maximal"));
     }
 

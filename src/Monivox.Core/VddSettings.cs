@@ -11,7 +11,7 @@ namespace Monivox.Core;
 public static class VddSettings
 {
     /// <summary>Gültige Grenzen laut Treiber-Dokumentation.</summary>
-    public const int MinWidth = 640, MaxWidth = 7680, MinHeight = 480, MaxHeight = 4320, MaxMonitors = 16;
+    public const int MinWidth = 640, MaxWidth = 7680, MinHeight = 480, MaxHeight = 4320, MaxMonitors = 24;
 
     public static XDocument CreateDefault() => new(
         new XDeclaration("1.0", "utf-8", null),

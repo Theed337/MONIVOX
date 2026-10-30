@@ -2,8 +2,8 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:Monivox.App"
-        Title="MONIVOX" Width="1180" Height="800" MinWidth="900" MinHeight="620"
-        Background="{DynamicResource Bg}" WindowStartupLocation="CenterScreen">
+        Title="MONIVOX" Width="1280" Height="860" MinWidth="980" MinHeight="680"
+        Style="{StaticResource AppWindow}" WindowStartupLocation="CenterScreen">
     <Grid>
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="220"/>
@@ -65,15 +65,14 @@
                             </StackPanel>
                         </WrapPanel>
                     </Border>
-                    <WrapPanel Margin="0,0,0,8">
-                        <TextBlock Text="Vorlagen:" VerticalAlignment="Center" Margin="0,0,10,0" Foreground="{DynamicResource TextDim}"/>
-                        <Button Content="2 nebeneinander" Click="Preset_Click" Tag="half"/>
-                        <Button Content="2 übereinander" Click="Preset_Click" Tag="half-h"/>
-                        <Button Content="3 Spalten" Click="Preset_Click" Tag="thirds"/>
-                        <Button Content="Haupt + 2" Click="Preset_Click" Tag="main-stack"/>
-                        <Button Content="2 × 2" Click="Preset_Click" Tag="grid"/>
-                        <Button Content="Leeren" Click="Preset_Click" Tag="empty"/>
-                    </WrapPanel>
+                    <DockPanel Margin="0,0,0,10">
+                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                            <Button Content="＋ Bereich hinzufügen" Click="AddRegion_Click"/>
+                            <Button Content="Alle Bereiche löschen" Click="ClearRegions_Click" Margin="0"/>
+                        </StackPanel>
+                        <TextBlock x:Name="RegionCountText" Style="{StaticResource Sub}" VerticalAlignment="Center"
+                                   Text="Ziehe mit der Maus auf dem Monitor Bereiche auf. Kanten und Ecken lassen sich verschieben."/>
+                    </DockPanel>
                 </StackPanel>
 
                 <Border DockPanel.Dock="Bottom" Style="{StaticResource Card}" Margin="0,12,0,0">
@@ -93,6 +92,8 @@
                                 <Button Content="⇆ Teilen" Click="SplitV_Click" VerticalAlignment="Bottom"/>
                                 <Button Content="⇅ Teilen" Click="SplitH_Click" VerticalAlignment="Bottom"/>
                                 <Button Content="Entfernen" Click="Remove_Click" VerticalAlignment="Bottom"/>
+                                <CheckBox x:Name="TaskbarBox" VerticalAlignment="Bottom" Margin="8,0,0,6" Click="TaskbarBox_Click"
+                                          Content="Taskleiste hier ausblenden"/>
                                 <CheckBox x:Name="DirectBox" VerticalAlignment="Bottom" Margin="8,0,0,6" Click="DirectBox_Click"
                                           Content="★ Direktbereich – keine Latenz, G-Sync, DRM"
                                           ToolTip="Dieser Bereich zeigt den echten Monitor (nicht virtuell). Ideal für Spiele und Filme. Nur ein Direktbereich pro Monitor."/>

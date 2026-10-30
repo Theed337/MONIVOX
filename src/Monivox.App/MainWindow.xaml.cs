@@ -151,6 +151,7 @@ public partial class MainWindow : Window
         }));
         _loading = false;
         Validate();
+        UpdateRegionCount();
     }
 
     private void ApplyMonitorSize()
@@ -220,7 +221,7 @@ public partial class MainWindow : Window
         if (string.IsNullOrWhiteSpace(name)) return;
         if (_profiles.Any(p => p.Name == name)) { MessageBox.Show(this, "Diesen Namen gibt es schon.", "MONIVOX"); return; }
         CaptureProfile();
-        _profiles.Add(new Profile { Name = name, Layout = LayoutPresets.HalfVertical, PhysicalMonitorId = (MonitorBox.SelectedItem as MonitorItem)?.Device ?? "" });
+        _profiles.Add(new Profile { Name = name, Layout = new Layout(name, []), PhysicalMonitorId = (MonitorBox.SelectedItem as MonitorItem)?.Device ?? "" });
         ProfileBox.Items.Add(name);
         ProfileBox.SelectedIndex = _profiles.Count - 1;
     }
@@ -281,11 +282,24 @@ public partial class MainWindow : Window
 
     // ================================================================ Editor
 
-    private void Preset_Click(object sender, RoutedEventArgs e)
+    private void AddRegion_Click(object sender, RoutedEventArgs e)
     {
-        string key = (string)((Button)sender).Tag;
-        Editor.Load(key == "empty" ? new Layout("leer", []) : LayoutPresets.All[key]);
-        OnEditorChanged();
+        if (Editor.Regions.Count >= Layout.MaxRegions) return;
+        // Neuer Bereich mittig, ein Viertel der Fläche – danach frei verschieben/ziehen
+        Editor.AddRegion(new NormRect(0.375, 0.375, 0.25, 0.25));
+    }
+
+    private void ClearRegions_Click(object sender, RoutedEventArgs e)
+    {
+        if (Editor.Regions.Count == 0) return;
+        if (MessageBox.Show(this, "Alle Bereiche dieses Profils löschen?", "MONIVOX", MessageBoxButton.YesNo) != MessageBoxResult.Yes) return;
+        Editor.Clear();
+    }
+
+    private void TaskbarBox_Click(object sender, RoutedEventArgs e)
+    {
+        int i = Editor.SelectedIndex;
+        if (i >= 0) Editor.SetTaskbarHidden(i, TaskbarBox.IsChecked == true);
     }
 
     private void OnEditorChanged()
@@ -293,6 +307,16 @@ public partial class MainWindow : Window
         if (_loading) return;
         ShowSelection();
         Validate();
+        UpdateRegionCount();
+    }
+
+    private void UpdateRegionCount()
+    {
+        int n = Editor.Regions.Count;
+        RegionCountText.Text = n == 0
+            ? "Ziehe mit der Maus auf dem Monitor Bereiche auf. Kanten und Ecken lassen sich verschieben."
+            : $"{n} von max. {Layout.MaxRegions} Bereichen" + (n > 16 ? " – mehr als 16 virtuelle Monitore sind noch nicht ausgiebig getestet." : "") +
+              " Neue Bereiche einfach auf freier Fläche aufziehen.";
     }
 
     private void ShowSelection()
@@ -305,6 +329,7 @@ public partial class MainWindow : Window
             SelectionTitle.Text = "Kein Bereich gewählt – klicke einen Bereich an oder ziehe einen neuen auf.";
             NameBox.Text = XBox.Text = YBox.Text = WBox.Text = HBox.Text = "";
             DirectBox.IsChecked = false;
+            TaskbarBox.IsChecked = false;
             return;
         }
         var r = Editor.Regions[i];
@@ -317,6 +342,8 @@ public partial class MainWindow : Window
         WBox.Text = ((int)Math.Round(r.Width * w)).ToString(CultureInfo.InvariantCulture);
         HBox.Text = ((int)Math.Round(r.Height * h)).ToString(CultureInfo.InvariantCulture);
         DirectBox.IsChecked = Editor.DirectIndex == i;
+        TaskbarBox.IsChecked = Editor.IsTaskbarHidden(i);
+        TaskbarBox.IsEnabled = Editor.DirectIndex != i;
         _loading = false;
     }
 

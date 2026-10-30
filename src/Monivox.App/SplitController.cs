@@ -38,7 +38,7 @@ public sealed class SplitController : IDisposable
         Settings = Store.Load();
         if (Settings.Profiles.Count == 0)
         {
-            Settings = Settings with { Profiles = DefaultProfiles(), LastProfile = "Alltag" };
+            Settings = Settings with { Profiles = DefaultProfiles(), LastProfile = "Mein Monitor" };
             Store.Save(Settings);
         }
         _rules = new WindowRules(AddLog, action => _ui.BeginInvoke(DispatcherPriority.Background,
@@ -46,17 +46,9 @@ public sealed class SplitController : IDisposable
         _rules.Start();
     }
 
+    // Ein leeres Startprofil – Bereiche zieht man sich selbst auf
     private static IReadOnlyList<Profile> DefaultProfiles() =>
-    [
-        new Profile { Name = "Alltag", Layout = LayoutPresets.HalfVertical with { Names = ["Browser", "Discord"] } },
-        new Profile
-        {
-            Name = "Gaming",
-            Layout = LayoutPresets.MainAndTwoStacked with { Names = ["Spiel", "Discord", "Browser"], DirectIndex = 0 },
-            Apps = [new AppAssignment { Executable = "Discord.exe", RegionIndex = 1, State = Core.WindowState.Maximized }],
-        },
-        new Profile { Name = "Arbeit", Layout = LayoutPresets.Grid2x2 },
-    ];
+        [new Profile { Name = "Mein Monitor", Layout = new Layout("Mein Monitor", []) }];
 
     private void DispatcherTimerOnce(TimeSpan delay, Action action)
     {

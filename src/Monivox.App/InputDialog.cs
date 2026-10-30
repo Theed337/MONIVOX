@@ -16,13 +16,13 @@ public static class InputDialog
         Height = height,
         WindowStartupLocation = WindowStartupLocation.CenterOwner,
         ResizeMode = ResizeMode.NoResize,
-        Background = (System.Windows.Media.Brush)Application.Current.Resources["Bg"],
+        Style = (Style)Application.Current.Resources["AppWindow"],
         ShowInTaskbar = false,
     };
 
     public static string? Ask(Window owner, string title, string prompt, string initial)
     {
-        var w = CreateWindow(owner, title, 190);
+        var w = CreateWindow(owner, title, 220);
         var box = new TextBox { Text = initial, Margin = new Thickness(0, 8, 0, 12) };
         var ok = new Button { Content = "OK", IsDefault = true, Style = (Style)Application.Current.Resources["Primary"] };
         var cancel = new Button { Content = "Abbrechen", IsCancel = true };
@@ -48,8 +48,6 @@ public static class InputDialog
             ItemsSource = items.Select(i => i.Label).ToList(),
             Height = 300,
             Margin = new Thickness(0, 8, 0, 12),
-            Background = (System.Windows.Media.Brush)Application.Current.Resources["Surface"],
-            Foreground = (System.Windows.Media.Brush)Application.Current.Resources["Text"],
         };
         var ok = new Button { Content = "Übernehmen", IsDefault = true, Style = (Style)Application.Current.Resources["Primary"] };
         var cancel = new Button { Content = "Abbrechen", IsCancel = true };

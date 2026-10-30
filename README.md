@@ -9,8 +9,8 @@ Nur der gewählte Monitor wird aufgeteilt – alle anderen bleiben völlig unver
 
 ## Funktionen
 
-- **Freier Editor**: Bereiche aufziehen, verschieben, an Kanten ziehen, pixelgenau eingeben, Lücken erlaubt.
-  Auch schmale Streifen (z. B. Telemetrie bei Rennspielen) – Vorlagen sind nur eine Abkürzung.
+- **Freier Editor**: bis zu 24 Bereiche selbst aufziehen, verschieben, an Kanten ziehen, pixelgenau eingeben, Lücken erlaubt.
+  Auch schmale Streifen (z. B. Telemetrie bei Rennspielen). Taskleiste pro Bereich ausblendbar.
 - **Programme fest zuweisen**: „Discord öffnet sich → Bereich 2“, „Teams → Bereich 3“ – automatisch, auch nach einem Neustart des Programms; optional mit dem Profil mitstarten.
 - **Profile** (Gaming, Arbeit, Alltag …), Export/Import, Wechsel per Rechtsklick aufs Tray-Symbol.
 - **Infobereich**: läuft unten rechts in der Taskleiste, startet mit Windows (ohne UAC-Abfrage), Bildschirme entstehen beim Start automatisch.
