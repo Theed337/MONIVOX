@@ -40,6 +40,12 @@ public static class DisplayArranger
 
             uint flags = CDS_UPDATEREGISTRY | CDS_NORESET | (p.Primary ? CDS_SET_PRIMARY : 0);
             int rc = ChangeDisplaySettingsEx(p.DeviceName, ref dm, IntPtr.Zero, flags, IntPtr.Zero);
+            if (rc != DISP_CHANGE_SUCCESSFUL && p.Mode is not null)
+            {
+                // Modus wird nicht (mehr) unterstützt – dann nur die Position setzen
+                dm.dmFields = DM_POSITION;
+                rc = ChangeDisplaySettingsEx(p.DeviceName, ref dm, IntPtr.Zero, flags, IntPtr.Zero);
+            }
             if (rc != DISP_CHANGE_SUCCESSFUL)
                 throw new InvalidOperationException($"Anzeige {p.DeviceName} konnte nicht gesetzt werden (Code {rc}).");
         }

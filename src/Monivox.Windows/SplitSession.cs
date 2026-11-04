@@ -17,7 +17,11 @@ public sealed record SplitOptions(
 public sealed record RestoreState(string PhysicalDevice, PixelRect PhysicalBounds, bool PhysicalWasPrimary,
                                   IReadOnlyList<RestoreState.Entry> Displays)
 {
-    public sealed record Entry(string DeviceName, int X, int Y, bool Primary);
+    /// <summary>Width/Height/Hz = ursprünglicher Modus (0 = unbekannt, ältere Sicherungen).</summary>
+    public sealed record Entry(string DeviceName, int X, int Y, bool Primary, int Width = 0, int Height = 0, int Hz = 0)
+    {
+        public DisplayMode? Mode => Width > 0 && Height > 0 && Hz > 0 ? new DisplayMode(Width, Height, Hz) : null;
+    }
 }
 
 /// <summary>
@@ -93,7 +97,8 @@ public sealed class SplitSession(SplitOptions options, Action<string> log)
             var physical = SelectPhysical(all, options.PhysicalDevice);
             restore = new RestoreState(physical.DeviceName, physical.Bounds, physical.IsPrimary,
                 all.Where(d => !Displays.IsVirtual(d) && d.IsAttached)
-                   .Select(d => new RestoreState.Entry(d.DeviceName, d.Bounds.X, d.Bounds.Y, d.IsPrimary)).ToList());
+                   .Select(d => new RestoreState.Entry(d.DeviceName, d.Bounds.X, d.Bounds.Y, d.IsPrimary,
+                                                      d.Mode.Width, d.Mode.Height, d.Mode.RefreshHz)).ToList());
             SaveRestore(restore);
         }
         else if (options.PhysicalDevice is { } wanted && !restore.PhysicalDevice.EndsWith(wanted, StringComparison.OrdinalIgnoreCase))
@@ -105,6 +110,13 @@ public sealed class SplitSession(SplitOptions options, Action<string> log)
         var current = all.FirstOrDefault(d => d.DeviceName == restore.PhysicalDevice)
             ?? throw new InvalidOperationException($"Monitor {restore.PhysicalDevice} ist nicht mehr angeschlossen.");
         var physicalMode = current.Mode;
+        // Ursprüngliche Bildwiederholrate des echten Monitors (falls Windows sie zwischendurch auf 60 Hz gesetzt hat)
+        var originalPhysical = restore.Displays.FirstOrDefault(e => e.DeviceName == restore.PhysicalDevice)?.Mode;
+        if (originalPhysical is { } op && op.Width == physicalMode.Width && op.Height == physicalMode.Height) physicalMode = op;
+        // Modus je echtem Monitor, damit Windows beim Umordnen nicht auf 60 Hz zurückfällt
+        DisplayMode? ModeOf(string device) =>
+            restore.Displays.FirstOrDefault(e => e.DeviceName == device)?.Mode
+            ?? all.FirstOrDefault(d => d.DeviceName == device && d.IsAttached)?.Mode;
 
         var errors = options.Layout.Validate(physicalMode.Width, physicalMode.Height);
         if (errors.Count > 0) throw new InvalidOperationException(string.Join(Environment.NewLine, errors));
@@ -162,8 +174,8 @@ public sealed class SplitSession(SplitOptions options, Action<string> log)
             // Direktbereich: physischer Monitor bleibt, wo er ist; virtuelle Monitore als Block daneben
             var plan = DirectArrangement.Create(virtualSpecs, specs[layout.DirectIndex].Dest, physicalBounds, restore.PhysicalWasPrimary, others);
             foreach (var v in plan.Virtuals) placements.Add(new(deviceOf[v.Index], v.X, v.Y, v.Mode, false));
-            foreach (var o in plan.Others) placements.Add(new(o.DeviceName, o.Bounds.X, o.Bounds.Y, null, o.IsPrimary));
-            placements.Add(new(restore.PhysicalDevice, plan.Physical.X, plan.Physical.Y, null, plan.PhysicalPrimary));
+            foreach (var o in plan.Others) placements.Add(new(o.DeviceName, o.Bounds.X, o.Bounds.Y, ModeOf(o.DeviceName), o.IsPrimary));
+            placements.Add(new(restore.PhysicalDevice, plan.Physical.X, plan.Physical.Y, physicalMode, plan.PhysicalPrimary));
         }
         else
         {
@@ -174,8 +186,8 @@ public sealed class SplitSession(SplitOptions options, Action<string> log)
                 panelOrigin = (v0.X - specs[v0.Index].Dest.X, v0.Y - specs[v0.Index].Dest.Y);
             }
             foreach (var v in plan.Virtuals) placements.Add(new(deviceOf[v.Index], v.X, v.Y, v.Mode, v.Primary));
-            foreach (var o in plan.Others) placements.Add(new(o.DeviceName, o.Bounds.X, o.Bounds.Y, null, o.IsPrimary));
-            placements.Add(new(restore.PhysicalDevice, plan.ParkedPhysical.X, plan.ParkedPhysical.Y, null, false));
+            foreach (var o in plan.Others) placements.Add(new(o.DeviceName, o.Bounds.X, o.Bounds.Y, ModeOf(o.DeviceName), o.IsPrimary));
+            placements.Add(new(restore.PhysicalDevice, plan.ParkedPhysical.X, plan.ParkedPhysical.Y, physicalMode, false));
         }
         DisplayArranger.Apply(placements);
         WaitUntilArranged(placements, TimeSpan.FromSeconds(5));
@@ -291,7 +303,7 @@ public sealed class SplitSession(SplitOptions options, Action<string> log)
         if (restore is not null)
         {
             foreach (var e in restore.Displays.Where(e => all.Any(d => d.DeviceName == e.DeviceName)))
-                placements.Add(new(e.DeviceName, e.X, e.Y, null, e.Primary));
+                placements.Add(new(e.DeviceName, e.X, e.Y, e.Mode, e.Primary));
         }
         else
         {
