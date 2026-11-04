@@ -311,9 +311,13 @@ public sealed class SplitSession(SplitOptions options, Action<string> log)
             if (detach.Count > 0) log($"{detach.Count} virtuelle Monitore deaktiviert.");
         }
         try { File.Delete(RestorePath); } catch (IOException) { }
+        // Vom Compositor ausgeblendete Taskleisten wieder einblenden (er wurde hart beendet und konnte das nicht mehr)
+        int bars = Taskbars.ShowAll();
+        if (bars > 0) log($"{bars} Taskleiste(n) wieder eingeblendet.");
         // Treibergeräte abschalten: ohne Aufteilung erzeugt der Anzeigetreiber so keinerlei Last
         try { VddControl.DisableAll(log); }
         catch (Exception e) when (e is InvalidOperationException or UnauthorizedAccessException or System.ComponentModel.Win32Exception) { log($"Treiber abschalten: {e.Message}"); }
+        Taskbars.ShowAll();
         log("Ursprüngliche Anzeige wiederhergestellt.");
     }
 

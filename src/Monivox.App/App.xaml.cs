@@ -96,6 +96,9 @@ public partial class App : Application
             // Keine Aufteilung aktiv: Treibergeräte abschalten, damit der Anzeigetreiber keine Last erzeugt
             _ = Task.Run(() =>
             {
+                // Falls MONIVOX beim letzten Mal während des Teilens beendet wurde: Taskleisten zurückholen
+                int bars = Taskbars.ShowAll();
+                if (bars > 0) Controller.AddLog($"{bars} Taskleiste(n) wieder eingeblendet.");
                 try { VddControl.DisableAll(Controller.AddLog); }
                 catch (Exception ex) when (ex is InvalidOperationException or UnauthorizedAccessException or System.ComponentModel.Win32Exception) { Controller.AddLog($"Treiber abschalten: {ex.Message}"); }
             });
