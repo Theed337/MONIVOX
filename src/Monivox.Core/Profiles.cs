@@ -90,6 +90,8 @@ public sealed record SettingsDocument
     public bool GatherWindows { get; init; } = true;
     /// <summary>Farbige Rahmen um die Bereiche anzeigen.</summary>
     public bool ShowFrames { get; init; }
+    /// <summary>Skalierung der virtuellen Bildschirme in Prozent: 0 = wie der aufgeteilte Monitor, -1 = Windows-Empfehlung.</summary>
+    public int VirtualScalePercent { get; init; }
 }
 
 /// <summary>Lädt und speichert Profile als JSON (atomar über eine temporäre Datei).</summary>

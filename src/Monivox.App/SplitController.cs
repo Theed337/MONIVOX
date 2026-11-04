@@ -130,7 +130,8 @@ public sealed class SplitController : IDisposable
             PhysicalDevice: string.IsNullOrWhiteSpace(profile.PhysicalMonitorId) ? null : NormalizeDevice(profile.PhysicalMonitorId),
             RefreshHz: profile.RefreshHz,
             CompositorPath: Path.Combine(AppContext.BaseDirectory, "MonivoxCompositor.exe"),
-            ShowFrames: Settings.ShowFrames);
+            ShowFrames: Settings.ShowFrames,
+            VirtualScalePercent: Settings.VirtualScalePercent);
 
         var session = new SplitSession(options, AddLog);
         bool firstReady = true;

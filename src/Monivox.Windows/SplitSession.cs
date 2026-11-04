@@ -10,7 +10,8 @@ public sealed record SplitOptions(
     string? PhysicalDevice = null,
     int RefreshHz = 0,
     string CompositorPath = "MonivoxCompositor.exe",
-    bool ShowFrames = false);
+    bool ShowFrames = false,
+    int VirtualScalePercent = 0);
 
 /// <summary>Gesicherte Anordnung vor dem Split – wird von <see cref="SplitSession.Stop"/> wiederhergestellt.</summary>
 public sealed record RestoreState(string PhysicalDevice, PixelRect PhysicalBounds, bool PhysicalWasPrimary,
@@ -179,6 +180,28 @@ public sealed class SplitSession(SplitOptions options, Action<string> log)
         DisplayArranger.Apply(placements);
         WaitUntilArranged(placements, TimeSpan.FromSeconds(5));
         log("Monitore angeordnet.");
+
+        // Skalierung der virtuellen Monitore: Windows wählt für neue Monitore oft 150–200 % ("alles gezoomt").
+        // Standard: wie der aufgeteilte Monitor; -1 = Windows-Empfehlung beibehalten.
+        if (options.VirtualScalePercent >= 0)
+        {
+            int wanted = options.VirtualScalePercent > 0 ? options.VirtualScalePercent : DpiScaling.Get(restore.PhysicalDevice) ?? 100;
+            var changed = new List<string>();
+            foreach (var spec in virtualSpecs)
+            {
+                string dev = deviceOf[spec.Index];
+                int? before = DpiScaling.Get(dev);
+                if (before == wanted) continue;
+                int? set = DpiScaling.Set(dev, wanted);
+                if (set is null) log($"  Skalierung für Bereich {spec.Index + 1} konnte nicht gesetzt werden.");
+                else changed.Add($"Bereich {spec.Index + 1}: {before?.ToString() ?? "?"} % → {set} %");
+            }
+            if (changed.Count > 0)
+            {
+                log($"Skalierung angepasst ({string.Join(", ", changed)}).");
+                Thread.Sleep(700); // Windows verteilt die Änderung an alle Fenster
+            }
+        }
 
         // Nach dem Umschalten tatsächliche Modi prüfen
         var after = Displays.Enumerate();

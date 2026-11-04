@@ -157,6 +157,12 @@
                             <CheckBox x:Name="AutoUpdateBox" Content="Updates automatisch installieren" Click="Settings_Changed"/>
                             <CheckBox x:Name="GatherBox" Content="Beim Teilen alle Fenster ohne Zuweisung auf den Hauptmonitor holen" Click="Settings_Changed"/>
                             <CheckBox x:Name="FramesBox" Content="Farbige Rahmen um die Bereiche anzeigen (auch per Tray oder Strg + Alt + Shift + F)" Click="Frames_Click"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                <TextBlock Text="Skalierung der virtuellen Bildschirme:" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                <ComboBox x:Name="ScaleBox" Width="300" SelectionChanged="Scale_Changed"/>
+                            </StackPanel>
+                            <TextBlock Style="{StaticResource Sub}" Margin="0,4,0,0" TextWrapping="Wrap"
+                                       Text="Größe von Text und Apps auf den virtuellen Bildschirmen. „Wie der aufgeteilte Monitor“ sieht aus wie ohne MONIVOX. Gilt ab dem nächsten Teilen."/>
                         </StackPanel>
                     </Border>
                     <Border Style="{StaticResource Card}">

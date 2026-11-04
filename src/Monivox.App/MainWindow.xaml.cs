@@ -59,6 +59,9 @@ public partial class MainWindow : Window
         AutoUpdateBox.IsChecked = controller.Settings.AutoUpdate;
         FramesBox.IsChecked = controller.Settings.ShowFrames;
         GatherBox.IsChecked = controller.Settings.GatherWindows;
+        foreach (var (label, _) in ScaleChoices) ScaleBox.Items.Add(label);
+        int scaleIdx = Array.FindIndex(ScaleChoices, c => c.Value == controller.Settings.VirtualScalePercent);
+        ScaleBox.SelectedIndex = scaleIdx >= 0 ? scaleIdx : 0;
         controller.StateChanged += () => Dispatcher.BeginInvoke(() => FramesBox.IsChecked = _controller.Settings.ShowFrames);
 
         RefreshDriver();
@@ -595,6 +598,23 @@ public partial class MainWindow : Window
             AutoUpdate = AutoUpdateBox.IsChecked == true,
             GatherWindows = GatherBox.IsChecked == true,
         });
+    }
+
+    private static readonly (string Label, int Value)[] ScaleChoices =
+    [
+        ("Wie der aufgeteilte Monitor (empfohlen)", 0),
+        ("100 %", 100), ("125 %", 125), ("150 %", 150), ("175 %", 175), ("200 %", 200),
+        ("Windows-Empfehlung (nicht ändern)", -1),
+    ];
+
+    private void Scale_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (ScaleBox.SelectedIndex < 0 || !IsLoaded) return;
+        int value = ScaleChoices[ScaleBox.SelectedIndex].Value;
+        if (value == _controller.Settings.VirtualScalePercent) return;
+        _controller.SaveSettings(_controller.Settings with { VirtualScalePercent = value });
+        if (_controller.State == SplitState.Running)
+            _controller.AddLog("Skalierung gespeichert – gilt nach „Teilen beenden“ und erneutem „Teilen starten“.");
     }
 
     private async void CheckUpdates_Click(object sender, RoutedEventArgs e) => await _controller.CheckForUpdatesAsync(interactive: true);
